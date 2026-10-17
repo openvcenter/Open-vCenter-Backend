@@ -14,7 +14,7 @@
   <a href="https://openvcenter.com/running">Run it</a> ·
   <a href="https://openvcenter.com/docker-compose">Docker Compose</a> ·
   <a href="https://openvcenter.com/kubernetes">Kubernetes</a> ·
-  <a href="https://github.com/claudio-azevedo/Open-Virtualization-Manager/releases">Release Notes</a>
+  <a href="https://github.com/openvcenter/Open-vCenter-Backend/releases">Release Notes</a>
 </p>
 
 # ovc-backend
@@ -40,7 +40,7 @@ ovc-frontend ──REST /api/*──▶ ovc-backend ──RabbitMQ──▶ ovc-
 ```
 
 > A pre-built image is published to GHCR as
-> [`ghcr.io/claudio-azevedo/ovc-backend`](https://github.com/claudio-azevedo/Open-vCenter-Backend/pkgs/container/ovc-backend) -
+> [`ghcr.io/openvcenter/ovc-backend`](https://github.com/openvcenter/Open-vCenter-Backend/pkgs/container/ovc-backend) -
 > see [Docker Compose](https://openvcenter.com/docker-compose) or
 > [Kubernetes](https://openvcenter.com/kubernetes) to run the whole stack with it.
 > Everything from here down is for **local development**, running this app
@@ -199,7 +199,7 @@ features, migrations or contract changes, **major** once the API is stable
 `version` in `pyproject.toml` (the only place it's written - the app reads it
 back from the installed package for OpenAPI's `info.version`), a git tag
 (`0.1.2`, no `v` prefix), and a GitHub Release. Pushing the tag makes CI
-publish the image `ghcr.io/claudio-azevedo/ovc-backend:<version>` (every push
+publish the image `ghcr.io/openvcenter/ovc-backend:<version>` (every push
 to `main` still publishes `:latest`).
 
 1. Start from an up-to-date, clean `main` where `ruff check app` and
