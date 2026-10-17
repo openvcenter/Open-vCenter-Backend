@@ -8,6 +8,14 @@ All notable changes to ovc-backend. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-17
+
+### Changed
+
+- The project moved to the openvcenter GitHub organization: images are now
+  published as `ghcr.io/openvcenter/ovc-backend`, and the README shows the new
+  Open vCenter logo. No code changes.
+
 ## [0.2.0] - 2026-10-03
 
 ### Added
@@ -57,7 +65,8 @@ All notable changes to ovc-backend. The format follows
 
 First public release.
 
-[Unreleased]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.1...HEAD
+[0.2.1]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.1.0...0.1.1
 [0.1.0]: https://github.com/openvcenter/Open-vCenter-Backend/releases/tag/0.1.0
