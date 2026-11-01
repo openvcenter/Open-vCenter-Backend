@@ -19,11 +19,13 @@ router = APIRouter(tags=["vlans"])
 
 
 def _visible(scope: Scope, vlan: Vlan) -> bool:
-    return (
-        scope.all
-        or (vlan.cluster_id is not None and scope.sees_cluster(vlan.cluster_id))
-        or (vlan.host_id is not None and scope.sees_host(vlan.host_id))
-    )
+    return scope.sees_cluster(vlan.cluster_id) or scope.sees_host(vlan.host_id)
+
+
+def _owner(vlan_or_body) -> tuple[str, str | None]:
+    if vlan_or_body.cluster_id:
+        return ("cluster", vlan_or_body.cluster_id)
+    return ("host", vlan_or_body.host_id)
 
 
 @router.get("/vlans", response_model=list[VlanOut])
@@ -34,6 +36,11 @@ async def get_vlans(
     cluster_id: str | None = Query(default=None, alias="clusterId"),
 ) -> list[VlanOut]:
     vlans = await list_vlans(db, host_id=host_id, cluster_id=cluster_id)
+    # the VLANs of a visible VM's host / cluster too (NIC pickers need them)
+    if host_id is not None and await scope.sees_host_context(db, host_id):
+        return [vlan_out(v) for v in vlans]
+    if cluster_id is not None and await scope.sees_cluster_context(db, cluster_id):
+        return [vlan_out(v) for v in vlans]
     return [vlan_out(v) for v in vlans if _visible(scope, v)]
 
 
@@ -41,13 +48,7 @@ async def get_vlans(
 async def add_vlan(
     body: VlanCreate, db: DbSession, scope: Scope, user: CurrentUser
 ) -> VlanOut:
-    allowed = scope.all
-    if body.cluster_id:
-        allowed = allowed or scope.sees_cluster(body.cluster_id)
-    if body.host_id:
-        allowed = allowed or scope.sees_host(body.host_id)
-    if not allowed:
-        raise forbidden("You cannot create a VLAN here")
+    scope.require("host.config", _owner(body))
     vlan = await create_vlan(
         db,
         name=body.name,
@@ -76,6 +77,7 @@ async def _get_visible_vlan(db: DbSession, scope: Scope, vlan_id: str) -> Vlan:
         raise not_found("VLAN")
     if not _visible(scope, vlan):
         raise forbidden()
+    scope.require("host.config", _owner(vlan))
     return vlan
 
 

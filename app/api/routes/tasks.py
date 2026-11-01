@@ -5,7 +5,6 @@ from sqlalchemy import select
 
 from ...models import Task, Vm
 from ...schemas import TaskDetailOut, TaskOut
-from ...services.rbac import vm_visible
 from ...services.serializers import task_detail_out, task_out
 from ..deps import DbSession, Scope
 from ..errors import forbidden, not_found
@@ -34,17 +33,20 @@ async def list_tasks(
     if scope.all:
         return [task_out(t) for t in tasks]
 
-    visible: list[Task] = []
-    for t in tasks:
-        if t.target_type == "host" and scope.sees_host(t.host_id):
-            visible.append(t)
-        elif t.target_type == "vm":
-            vm = await db.get(Vm, t.target_id)
-            if vm is not None and vm_visible(scope, vm):
-                visible.append(t)
-            elif scope.sees_host(t.host_id):
-                visible.append(t)
-    return [task_out(t) for t in visible]
+    vm_ids = {t.target_id for t in tasks if t.target_type == "vm" and t.target_id}
+    vms = (
+        {v.id: v for v in (await db.execute(select(Vm).where(Vm.id.in_(vm_ids)))).scalars()}
+        if vm_ids
+        else {}
+    )
+    return [task_out(t) for t in tasks if _task_visible(scope, t, vms.get(t.target_id))]
+
+
+def _task_visible(scope: Scope, task: Task, vm: Vm | None) -> bool:
+    """A VM task follows its VM; once the VM is gone, its host."""
+    if task.target_type == "vm" and vm is not None:
+        return scope.vm_visible(vm)
+    return scope.sees_host(task.host_id)
 
 
 @router.get("/tasks/{task_id}", response_model=TaskDetailOut)
@@ -52,6 +54,7 @@ async def get_task(task_id: str, db: DbSession, scope: Scope) -> TaskDetailOut:
     task = await db.get(Task, task_id)
     if task is None:
         raise not_found("Task")
-    if not scope.all and not scope.sees_host(task.host_id):
+    vm = await db.get(Vm, task.target_id) if task.target_type == "vm" else None
+    if not _task_visible(scope, task, vm):
         raise forbidden()
     return task_detail_out(task)

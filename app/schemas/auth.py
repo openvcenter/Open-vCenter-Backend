@@ -3,17 +3,15 @@ from __future__ import annotations
 from .common import CamelModel
 
 
-class ScopeOut(CamelModel):
-    level: str
-    scope_id: str | None = None
-
-
 class MeOut(CamelModel):
     id: str
     email: str
     display_name: str | None = None
     roles: list[str] = []
-    scopes: list[ScopeOut] = []
+    groups: list[str] = []
+    # carries the admin role: every privilege everywhere
+    superuser: bool = False
+    global_privileges: list[str] = []
 
 
 class HealthOut(CamelModel):

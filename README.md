@@ -127,10 +127,11 @@ Docker Compose sets them itself; `.env.example` is the template for local runs.
 | `OVC_API_PREFIX`                                             | `/api`                                               | mount point for all routes                                                                                |
 | `OVC_CORS_ORIGINS`                                           | `["http://localhost:3000"]`                          | JSON list of allowed origins                                                                              |
 | `OVC_AUTH_MODE`                                              | `stub`                                               | `stub` = trust every request as `OVC_STUB_USER_EMAIL`; `oidc` = verify OIDC JWTs                          |
-| `OVC_STUB_USER_EMAIL`                                        | `operator@ovc.local`                                 | the dev principal (global scope grant + `OVC_ADMIN_ROLE`). Set the same `OVC_AUTH_MODE=stub` on the frontend too. |
+| `OVC_STUB_USER_EMAIL`                                        | `operator@ovc.local`                                 | the dev principal (carries `OVC_ADMIN_ROLE`). Set the same `OVC_AUTH_MODE=stub` on the frontend too. |
 | `OVC_OIDC_ISSUER` / `_AUDIENCE` / `_JWKS_URL` / `_CLIENT_ID` | -                                                    | required when `OVC_AUTH_MODE=oidc`                                                                        |
 | `OVC_OIDC_ROLES_CLAIM`                                       | `resource_access.${client_id}.roles`                 | dot-path to the roles array in the token (`${client_id}` substituted); e.g. `realm_access.roles`, `roles` |
-| `OVC_ADMIN_ROLE`                                             | `ADMINISTRATOR`                                      | this role bypasses every scope filter (full access, no `ScopeGrant`)                                      |
+| `OVC_OIDC_GROUPS_CLAIM` | `groups` | dot-path to the groups array in the token (same syntax). Roles and groups are what permissions are granted to |
+| `OVC_ADMIN_ROLE`                                             | `ADMINISTRATOR`                                      | superuser role: every privilege everywhere, no permission needed|
 | `OVC_AGENT_OFFLINE_AFTER_SECONDS`                            | `120`                                                | host is "offline" if `agent_status` is older than this                                                    |
 | `OVC_TASK_TIMEOUT_SECONDS`                                   | `300`                                                | worker marks a task `timeout` after this                                                                  |
 | `OVC_AUDIT_RETENTION_DAYS`                                   | `365`                                                | days an audit event is kept before the worker prunes it; `0` = keep forever                               |
@@ -146,14 +147,14 @@ Everything under `OVC_API_PREFIX` (default `/api`). See
 - `GET /health`, `GET /me`
 - `GET /clusters`, `/clusters/{id}`
 - `GET /hosts?clusterId`, `/hosts/{id}`, `/hosts/{id}/{vms,templates,isos}`
-- `GET /hosts/{id}/agent-config` - agent `config.ini` for onboarding (admin only; RabbitMQ creds)
+- `GET /hosts/{id}/agent-config` - agent `config.ini` for onboarding (`host.manage`; RabbitMQ creds)
 - `GET /folders?hostId&clusterId`
 - `GET /tag-categories`, `/tags` - the global tag catalog (`Tag.vmCount` within the caller's scope)
 - `GET /vms?hostId&folderId&state`, `/vms/{id}`
 - `POST /vms/{id}/actions/{start|stop|shutdown|restart|pause}` → `202 { task }`
 - `DELETE /vms/{id}` → `202 { task }`
 - `GET /tasks?vmId&hostId&status&limit`, `/tasks/{id}`
-- `GET /audit-events?actor&action&targetType&targetId&hostId&clusterId&outcome&since&until&q&limit&cursor` - the audit log, newest first (admin only)
+- `GET /audit-events?actor&action&targetType&targetId&hostId&clusterId&outcome&since&until&q&limit&cursor` - the audit log, newest first (`audit.read`)
 - `GET /templates`, `/isos`
 
 Organization (synchronous, DB only - no agent):
@@ -162,9 +163,19 @@ Organization (synchronous, DB only - no agent):
 - `POST /hosts` `{name, clusterId?}` · `PATCH /hosts/{id}` any subset of `{name, fqdn, clusterId}` (`clusterId: null` = standalone; `fqdn` normally left to the agent) · `DELETE /hosts/{id}` (cascades VMs/folders/templates/ISOs)
 - `POST /folders` `{name, clusterId? | hostId?}` · `PATCH /folders/{id}` `{name}` · `DELETE /folders/{id}`
 - `PATCH /vms/{id}` `{folderId}` - move a VM into a folder or out (`null`)
-- `POST /tag-categories` `{name}` · `PATCH /tag-categories/{id}` `{name}` · `DELETE /tag-categories/{id}` (also deletes its tags) - admin only
-- `POST /tags` `{name, categoryId?, color?}` · `PATCH /tags/{id}` any subset of `{name, categoryId, color}` (`color` ∈ `models.tag.TAG_COLORS`) · `DELETE /tags/{id}` (removed from every VM) - admin only
-- `PUT /vms/{id}/tags` `{tagIds}` - replace a VM's tags (at most one per category; anyone who sees the VM)
+- `POST /tag-categories` `{name}` · `PATCH /tag-categories/{id}` `{name}` · `DELETE /tag-categories/{id}` (also deletes its tags) - `tag.manage`
+- `POST /tags` `{name, categoryId?, color?}` · `PATCH /tags/{id}` any subset of `{name, categoryId, color}` (`color` ∈ `models.tag.TAG_COLORS`) · `DELETE /tags/{id}` (removed from every VM) - `tag.manage`
+- `PUT /vms/{id}/tags` `{tagIds}` - replace a VM's tags (at most one per category; `vm.config`)
+
+Access control (see LLM.md "Access control"):
+
+- `GET /rbac/catalog` - privileges + the privilege each VM action needs
+- `GET /roles` · `POST /roles` · `PATCH /roles/{id}` · `POST /roles/{id}/clone` · `DELETE /roles/{id}` (`rbac.manage`; built-in roles are read-only)
+- `GET /permissions?scopeType&scopeId` (direct + inherited) · `POST /permissions` · `PATCH /permissions/{id}` · `DELETE /permissions/{id}` (`rbac.manage` on the object)
+- `GET /principals?q` - role / group names to suggest
+- `GET /me/privileges?ids=vm:<id>,host:<id>,global` - the caller's privileges per object
+- `GET /rbac/effective?principal=group:<name>&object=vm:<id>` - why a role / group may do what
+- `GET /vms/{id}/console` (`vm.console`) · `GET /hosts/{id}/console` (`host.console`) - where the console connects
 
 Responses are **camelCase** JSON. Errors: `{ "error": { "code", "message", "details"? } }`.
 

@@ -19,7 +19,7 @@ from ..models import (
     Vm,
     vm_tags,
 )
-from .rbac import VisibleScope, vm_visible_clause
+from .rbac import Access
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ async def delete_category(db: AsyncSession, category: TagCategory) -> None:
 
 # ---- tags -----------------------------------------------------------------------
 
-async def list_tags(db: AsyncSession, scope: VisibleScope) -> list[tuple[Tag, int]]:
+async def list_tags(db: AsyncSession, scope: Access) -> list[tuple[Tag, int]]:
     """Every tag with the number of VMs carrying it that `scope` can see."""
     tags = (
         await db.execute(
@@ -118,7 +118,7 @@ async def list_tags(db: AsyncSession, scope: VisibleScope) -> list[tuple[Tag, in
                 select(vm_tags.c.tag_id, func.count())
                 .select_from(vm_tags)
                 .join(Vm, Vm.id == vm_tags.c.vm_id)
-                .where(vm_visible_clause(scope))
+                .where(scope.vm_clause())
                 .group_by(vm_tags.c.tag_id)
             )
         ).all()
@@ -126,14 +126,14 @@ async def list_tags(db: AsyncSession, scope: VisibleScope) -> list[tuple[Tag, in
     return [(t, counts.get(t.id, 0)) for t in tags]
 
 
-async def tag_vm_count(db: AsyncSession, scope: VisibleScope, tag_id: str) -> int:
+async def tag_vm_count(db: AsyncSession, scope: Access, tag_id: str) -> int:
     return (
         await db.scalar(
             select(func.count())
             .select_from(vm_tags)
             .join(Vm, Vm.id == vm_tags.c.vm_id)
             .where(vm_tags.c.tag_id == tag_id)
-            .where(vm_visible_clause(scope))
+            .where(scope.vm_clause())
         )
         or 0
     )

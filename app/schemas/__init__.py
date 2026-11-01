@@ -9,7 +9,7 @@ from .agent_binary import (
     AgentStorageInfoOut,
 )
 from .audit import AuditEventOut, AuditEventPage
-from .auth import HealthOut, MeOut, ScopeOut
+from .auth import HealthOut, MeOut
 from .cluster import ClusterCreate, ClusterOut, ClusterUpdate
 from .common import CamelModel, ErrorDetail, ErrorResponse
 from .folder import FolderCreate, FolderOut, FolderUpdate
@@ -25,6 +25,24 @@ from .host import (
 )
 from .image import IsoOut, TemplateOut
 from .metric import HostMetricSample, VmMetricSample
+from .rbac import (
+    ConsoleTargetOut,
+    EffectiveLevelOut,
+    EffectiveOut,
+    EffectivePathOut,
+    MyPrivilegesOut,
+    PermissionCreate,
+    PermissionListOut,
+    PermissionOut,
+    PermissionUpdate,
+    PrincipalOut,
+    PrivilegeOut,
+    RbacCatalogOut,
+    RoleClone,
+    RoleCreate,
+    RoleOut,
+    RoleUpdate,
+)
 from .tag import (
     TagCategoryCreate,
     TagCategoryOut,
@@ -66,7 +84,22 @@ __all__ = [
     "ErrorResponse",
     "HealthOut",
     "MeOut",
-    "ScopeOut",
+    "ConsoleTargetOut",
+    "EffectiveLevelOut",
+    "EffectiveOut",
+    "EffectivePathOut",
+    "MyPrivilegesOut",
+    "PermissionCreate",
+    "PermissionListOut",
+    "PermissionOut",
+    "PermissionUpdate",
+    "PrincipalOut",
+    "PrivilegeOut",
+    "RbacCatalogOut",
+    "RoleClone",
+    "RoleCreate",
+    "RoleOut",
+    "RoleUpdate",
     "ClusterOut",
     "ClusterCreate",
     "ClusterUpdate",

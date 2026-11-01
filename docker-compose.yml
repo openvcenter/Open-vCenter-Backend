@@ -14,7 +14,7 @@ x-app-env: &app-env
   # Auth: "stub" trusts every request. To verify OIDC JWTs instead, set
   # OVC_AUTH_MODE=oidc and the vars below (defaults target the "ovc" realm from
   # ../infra-containers/keycloak/ovc-realm.json). Roles are read at
-  # OVC_OIDC_ROLES_CLAIM; ADMINISTRATOR bypasses every scope filter.
+  # OVC_OIDC_ROLES_CLAIM; ADMINISTRATOR is a superuser.
   OVC_AUTH_MODE: stub
   # ISSUER must equal the token's `iss` (the URL the frontend/browser used),
   # while JWKS_URL is how *this* container reaches the provider - they differ here.

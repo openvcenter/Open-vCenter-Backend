@@ -26,7 +26,7 @@ from app.models import (
     Vm,
 )
 from app.services import audit
-from app.services.rbac import VisibleScope
+from app.services.rbac import Access, Principals
 
 
 class FakeSession:
@@ -172,7 +172,7 @@ def client_as():
     async def no_session():
         yield None
 
-    def make(scope: VisibleScope) -> httpx.AsyncClient:
+    def make(scope: Access) -> httpx.AsyncClient:
         app.dependency_overrides[get_session] = no_session
         app.dependency_overrides[get_scope] = lambda: scope
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
@@ -181,14 +181,14 @@ def client_as():
     app.dependency_overrides.clear()
 
 
-async def test_audit_events_admin_only(client_as) -> None:
-    async with client_as(VisibleScope(all=False, host_ids={"h1"})) as client:
+async def test_audit_events_need_audit_read(client_as) -> None:
+    async with client_as(Access(Principals(roles=("user",)))) as client:
         resp = await client.get("/api/audit-events")
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "FORBIDDEN"
 
 
 async def test_audit_events_rejects_bad_ids(client_as) -> None:
-    async with client_as(VisibleScope(all=True)) as client:
+    async with client_as(Access(Principals(roles=("ADMINISTRATOR",)))) as client:
         resp = await client.get("/api/audit-events", params={"hostId": "nope"})
     assert resp.status_code == 422

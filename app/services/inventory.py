@@ -36,6 +36,7 @@ from ..models import (
     VmThumbnail,
 )
 from . import audit
+from .rbac import delete_permissions
 
 log = logging.getLogger(__name__)
 
@@ -550,6 +551,7 @@ async def apply_vm_inventory(db: AsyncSession, host_id: str, payload: dict) -> N
                     details={"reason": "no longer reported by its host agent"},
                 )
             await clear_vm_state(vm.id)
+            await delete_permissions(db, "vm", [vm.id])
             await db.delete(vm)
 
     # This snapshot confirms the deletion of any tombstoned GUID it no longer
@@ -1022,6 +1024,7 @@ async def _apply_response_state(
             await db.flush()
             await _apply_response_vm_status(db, host_id, resp)
         elif placeholder is not None:
+            await delete_permissions(db, "vm", [placeholder.id])
             await db.execute(delete(Vm).where(Vm.id == placeholder.id))
             await clear_vm_state(placeholder.id)
     elif task.kind == "vm_delete" and task.status == "succeeded":
@@ -1031,6 +1034,7 @@ async def _apply_response_state(
         gone = await db.get(Vm, task.target_id)
         if gone is not None and gone.vm_uuid:
             await mark_vm_deleted(host_id, gone.vm_uuid)
+        await delete_permissions(db, "vm", [task.target_id])
         await db.execute(delete(Vm).where(Vm.id == task.target_id))
         await clear_vm_state(task.target_id)
     elif task.status == "succeeded":

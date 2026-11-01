@@ -24,6 +24,7 @@ from ..messaging import (
 from ..models import Host, HostMetric, Task, Vm, VmMetric
 from ..models.task import TERMINAL_TASK_STATUSES
 from ..services.audit import prune_events, settle_task_events
+from ..services.rbac import delete_orphan_permissions
 from ..task_timeouts import task_timeout_seconds
 from .consumers import handle_message
 
@@ -34,6 +35,7 @@ HOST_SCAN_INTERVAL = 15
 TIMEOUT_SWEEP_INTERVAL = 30
 METRICS_SWEEP_INTERVAL = 300
 AUDIT_SWEEP_INTERVAL = 3600
+PERMISSION_SWEEP_INTERVAL = 3600
 
 # How long RabbitMQ may stay disconnected before giving up and exiting, so the
 # orchestrator restarts the process fresh. connect_robust retries the
@@ -229,6 +231,20 @@ async def _audit_retention_sweeper() -> None:
         await asyncio.sleep(AUDIT_SWEEP_INTERVAL)
 
 
+async def _orphan_permission_sweeper() -> None:
+    """Drop permissions whose object is gone. Deletes remove them explicitly;
+    this catches FK cascades and anything removed out of band."""
+    while True:
+        try:
+            async with session_scope() as db:
+                removed = await delete_orphan_permissions(db)
+            if removed:
+                log.info("removed %d permission(s) of deleted objects", removed)
+        except Exception:  # noqa: BLE001 - retry on the next pass
+            log.exception("orphan permission sweep failed; will retry")
+        await asyncio.sleep(PERMISSION_SWEEP_INTERVAL)
+
+
 async def run() -> None:
     configure_logging()
     log.info("starting ovc-backend worker")
@@ -407,6 +423,7 @@ async def run() -> None:
     stale_checker_task = asyncio.create_task(_timeout_sweeper())
     metrics_sweeper_task = asyncio.create_task(_metrics_retention_sweeper())
     audit_sweeper_task = asyncio.create_task(_audit_retention_sweeper())
+    permission_sweeper_task = asyncio.create_task(_orphan_permission_sweeper())
     rabbitmq_health_task = asyncio.create_task(check_rabbitmq_health())
     consumer_health_task = asyncio.create_task(check_consumer_health())
     host_consumer_task = asyncio.create_task(check_host_consumers())
@@ -422,6 +439,7 @@ async def run() -> None:
         stale_checker_task.cancel()
         metrics_sweeper_task.cancel()
         audit_sweeper_task.cancel()
+        permission_sweeper_task.cancel()
         rabbitmq_health_task.cancel()
         consumer_health_task.cancel()
         host_consumer_task.cancel()

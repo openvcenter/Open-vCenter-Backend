@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..ids import new_id
-from ..models import ScopeGrant, User
+from ..models import User
 
 log = logging.getLogger(__name__)
 _settings = get_settings()
@@ -26,7 +26,6 @@ async def get_or_create_user(
     email: str,
     display_name: str | None = None,
     roles: list[str] | None = None,
-    grant_global: bool = False,
 ) -> User:
     user = await _lookup(db, email)
 
@@ -52,34 +51,11 @@ async def get_or_create_user(
     if roles is not None:
         user.roles = ",".join(roles)
 
-    if grant_global and not any(g.level == "global" for g in await _grants(db, user.id)):
-        try:
-            async with db.begin_nested():
-                db.add(
-                    ScopeGrant(
-                        id=new_id(), user_id=user.id, level="global", scope_id=None
-                    )
-                )
-                await db.flush()
-        except IntegrityError:
-            pass  # already granted by a concurrent request
-
     return user
 
 
-async def _grants(db: AsyncSession, user_id: str) -> list[ScopeGrant]:
-    return list(
-        (
-            await db.execute(select(ScopeGrant).where(ScopeGrant.user_id == user_id))
-        ).scalars()
-    )
-
-
 async def resolve_stub_user(db: AsyncSession) -> User:
-    """Dev principal: one shared admin (global scope grant + the admin role)."""
+    """Dev principal: one shared admin (carries the admin role)."""
     return await get_or_create_user(
-        db,
-        email=_settings.stub_user_email,
-        roles=[_settings.admin_role],
-        grant_global=True,
+        db, email=_settings.stub_user_email, roles=[_settings.admin_role]
     )

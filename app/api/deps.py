@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -11,7 +12,7 @@ from ..config import get_settings
 from ..db import get_session
 from ..models import User
 from ..services.auth import get_or_create_user, resolve_stub_user
-from ..services.rbac import VisibleScope, resolve_scope
+from ..services.rbac import Access, Principals, load_access
 from .errors import unauthorized
 
 log = logging.getLogger(__name__)
@@ -99,10 +100,9 @@ def _claim_by_path(claims: dict, path: str) -> object:
     return node
 
 
-def _token_roles(claims: dict) -> list[str]:
-    """Roles array at oidc_roles_claim (array, or space-delimited string)."""
-    path = _settings.oidc_roles_claim.replace("${client_id}", _settings.oidc_client_id)
-    value = _claim_by_path(claims, path)
+def _claim_list(claims: dict, setting: str) -> list[str]:
+    """String list at a configured dot-path (array, or space-delimited string)."""
+    value = _claim_by_path(claims, setting.replace("${client_id}", _settings.oidc_client_id))
     if isinstance(value, list):
         return [str(v) for v in value]
     if isinstance(value, str):
@@ -110,28 +110,47 @@ def _token_roles(claims: dict) -> list[str]:
     return []
 
 
-async def get_current_user(request: Request, db: DbSession) -> User:
+@dataclass(frozen=True)
+class Identity:
+    user: User
+    principals: Principals
+
+
+async def get_identity(request: Request, db: DbSession) -> Identity:
+    """Signed-in user plus their principals. Each auth mode is an adapter that
+    maps its credentials to the provider-neutral `Principals`."""
     if _settings.auth_mode == "stub":
-        return await resolve_stub_user(db)
+        user = await resolve_stub_user(db)
+        return Identity(user, Principals(roles=(_settings.admin_role,)))
 
     token = _bearer_token(request)
     if not token:
         raise unauthorized()
     claims = await _verify_oidc(token)
-    return await get_or_create_user(
+    roles = _claim_list(claims, _settings.oidc_roles_claim)
+    user = await get_or_create_user(
         db,
         email=claims.get("email") or claims["sub"],
         display_name=claims.get("name"),
-        roles=_token_roles(claims),
-        grant_global=False,
+        roles=roles,
     )
+    groups = _claim_list(claims, _settings.oidc_groups_claim)
+    return Identity(user, Principals(roles=tuple(roles), groups=tuple(groups)))
+
+
+CurrentIdentity = Annotated[Identity, Depends(get_identity)]
+
+
+async def get_current_user(identity: CurrentIdentity) -> User:
+    return identity.user
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-async def get_scope(user: CurrentUser, db: DbSession) -> VisibleScope:
-    return await resolve_scope(db, user)
+async def get_scope(identity: CurrentIdentity, db: DbSession) -> Access:
+    return await load_access(db, identity.principals)
 
 
-Scope = Annotated[VisibleScope, Depends(get_scope)]
+# What the caller may see and do - see services/rbac.py. Cached per request.
+Scope = Annotated[Access, Depends(get_scope)]

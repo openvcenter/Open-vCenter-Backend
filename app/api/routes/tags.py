@@ -25,18 +25,17 @@ from ...services.tags import (
     update_tag,
 )
 from ..deps import CurrentUser, DbSession, Scope
-from ..errors import forbidden, not_found
+from ..errors import not_found
 
 router = APIRouter(tags=["tags"])
 
 # The catalog is global: any signed-in user reads it (to render a VM's tags) and
-# assigns tags to the VMs they can see (PUT /vms/{id}/tags). Only an administrator
-# creates, renames or deletes tags and categories.
+# assigns tags to the VMs they hold `vm.config` on (PUT /vms/{id}/tags). Creating,
+# renaming or deleting tags and categories needs `tag.manage` globally.
 
 
 def _require_admin(scope: Scope) -> None:
-    if not scope.all:
-        raise forbidden("Only an administrator can manage tags")
+    scope.require("tag.manage")
 
 
 # ---- categories ---------------------------------------------------------------

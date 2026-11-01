@@ -9,6 +9,7 @@ from ..api.errors import ApiError, not_found
 from ..ids import new_id
 from ..models import DEFAULT_HYPERVISOR, Cluster, Folder, Host, Vm
 from .hosts import deprovision_host_messaging
+from .rbac import delete_permissions
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,11 @@ async def delete_cluster(db: AsyncSession, cluster: Cluster) -> None:
             "INVALID",
             "This cluster still has hosts - move or remove them first",
         )
+    folder_ids = (
+        await db.execute(select(Folder.id).where(Folder.cluster_id == cluster.id))
+    ).scalars().all()
+    await delete_permissions(db, "folder", folder_ids)
+    await delete_permissions(db, "cluster", [cluster.id])
     await db.delete(cluster)
     await db.flush()
     log.info("deleted cluster=%s", cluster.id)
@@ -72,7 +78,10 @@ async def move_host(db: AsyncSession, host: Host, cluster_id: str | None) -> Hos
         .where(Vm.host_id == host.id)
         .values(cluster_id=cluster_id, folder_id=None)
     )
-    await db.execute(delete(Folder).where(Folder.host_id == host.id))
+    dropped = (
+        await db.execute(delete(Folder).where(Folder.host_id == host.id).returning(Folder.id))
+    ).scalars().all()
+    await delete_permissions(db, "folder", dropped)
     await db.flush()
     log.info("moved host=%s -> cluster=%s", host.id, cluster_id or "(standalone)")
     return host
@@ -83,6 +92,13 @@ async def delete_host(db: AsyncSession, host: Host) -> None:
     templates and ISOs go with it via FK cascade. The host's RabbitMQ queues and
     agent user are torn down too (best-effort)."""
     host_id, host_ref, agent_rmq_user = host.id, host.short_id, host.agent_rmq_user
+    vm_ids = (await db.execute(select(Vm.id).where(Vm.host_id == host_id))).scalars().all()
+    folder_ids = (
+        await db.execute(select(Folder.id).where(Folder.host_id == host_id))
+    ).scalars().all()
+    await delete_permissions(db, "vm", vm_ids)
+    await delete_permissions(db, "folder", folder_ids)
+    await delete_permissions(db, "host", [host_id])
     await db.delete(host)
     await db.flush()
     await deprovision_host_messaging(host_ref, agent_rmq_user)
@@ -136,6 +152,7 @@ async def delete_folder(db: AsyncSession, folder: Folder) -> int:
     detached = await db.execute(
         update(Vm).where(Vm.folder_id == folder.id).values(folder_id=None)
     )
+    await delete_permissions(db, "folder", [folder.id])
     await db.delete(folder)
     await db.flush()
     return detached.rowcount or 0

@@ -31,7 +31,7 @@ from ...services.agent_upgrade import request_agent_upgrade
 from ...services.audit import changes, record
 from ...services.serializers import agent_connected, task_out
 from ..deps import CurrentUser, DbSession, Scope
-from ..errors import ApiError, forbidden, not_found
+from ..errors import ApiError, not_found
 
 log = logging.getLogger(__name__)
 
@@ -42,8 +42,7 @@ _CHUNK = 1 << 20
 
 
 def _require_admin(scope: Scope) -> None:
-    if not scope.all:
-        raise forbidden("Only an administrator can manage agent binaries")
+    scope.require("host.manage")
 
 
 def _out(b: AgentBinary) -> AgentBinaryOut:
@@ -293,8 +292,13 @@ async def rollout_agent_binary(
     user: CurrentUser,
 ) -> AgentRolloutResult:
     """Queue a ``host_update_agent`` task for each targeted host. Default target:
-    every online host on the binary's hypervisor whose agent version differs."""
-    _require_admin(scope)
+    every online host on the binary's hypervisor whose agent version differs.
+    Needs `host.manage` globally, or on each listed host."""
+    if body.host_ids:
+        for host_id in body.host_ids:
+            scope.require("host.manage", ("host", host_id))
+    else:
+        _require_admin(scope)
     binary = await db.get(AgentBinary, binary_id)
     if binary is None:
         raise not_found("Agent binary")

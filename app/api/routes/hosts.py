@@ -11,6 +11,7 @@ from ...config import get_settings
 from ...models import Cluster, Host, HostMetric, Iso, Task, Template, Vm
 from ...models.task import TERMINAL_TASK_STATUSES
 from ...schemas import (
+    ConsoleTargetOut,
     HostAgentConfigOut,
     HostAgentInstallOut,
     HostCreate,
@@ -27,6 +28,7 @@ from ...schemas.agent_binary import AgentUpgradeRequest
 from ...services.agent_store import verify_scope
 from ...services.agent_upgrade import request_agent_upgrade, resolve_upgrade_binary
 from ...services.audit import changes, record, settle_task_events
+from ...services.console import RDP_PORT, console_target
 from ...services.host_actions import (
     DISRUPTIVE_HOST_ACTIONS,
     READ_ONLY_HOST_ACTIONS,
@@ -42,6 +44,7 @@ from ...services.hosts import (
     render_agent_config,
 )
 from ...services.organization import delete_host, move_host
+from ...services.rbac import GLOBAL
 from ...services.serializers import (
     agent_connected,
     host_detail_out,
@@ -87,10 +90,7 @@ async def list_hosts(
 async def add_host(
     body: HostCreate, db: DbSession, scope: Scope, user: CurrentUser
 ) -> HostDetailOut:
-    if not scope.all and not (
-        body.cluster_id and scope.sees_cluster(body.cluster_id)
-    ):
-        raise forbidden("You cannot add a host here")
+    scope.require("host.manage", ("cluster", body.cluster_id) if body.cluster_id else GLOBAL)
     host = await create_host(
         db,
         name=body.name,
@@ -109,12 +109,23 @@ async def _cluster_ref(db: DbSession, cluster_id: str | None) -> dict | None:
     return {"id": cluster_id, "name": cluster.name if cluster else None}
 
 
-async def _get_visible_host(db: DbSession, scope: Scope, host_id: str) -> Host:
+async def _get_visible_host(
+    db: DbSession, scope: Scope, host_id: str, privilege: str | None = None
+) -> Host:
+    """The host, if the caller sees it (and holds `privilege` on it). Reads
+    without a privilege also work for the host of a visible VM."""
     host = await db.get(Host, host_id)
     if host is None:
         raise not_found("Host")
-    if not scope.sees_host(host.id):
+    visible = (
+        scope.sees_host(host.id)
+        if privilege is not None
+        else await scope.sees_host_context(db, host.id)
+    )
+    if not visible:
         raise forbidden()
+    if privilege is not None:
+        scope.require(privilege, ("host", host.id))
     return host
 
 
@@ -132,11 +143,12 @@ async def update_host(
     host = await _get_visible_host(db, scope, host_id)
     fields = body.model_fields_set
 
-    if "cluster_id" in fields:
-        if not scope.all and not (
-            body.cluster_id and scope.sees_cluster(body.cluster_id)
-        ):
-            raise forbidden("You cannot move this host")
+    if "cluster_id" in fields and body.cluster_id != host.cluster_id:
+        # leaving one place and arriving at another, both need host.manage
+        scope.require("host.manage", ("host", host.id))
+        scope.require(
+            "host.manage", ("cluster", body.cluster_id) if body.cluster_id else GLOBAL
+        )
         before = await _cluster_ref(db, host.cluster_id)
         host = await move_host(db, host, body.cluster_id)
         after = await _cluster_ref(db, host.cluster_id)
@@ -144,6 +156,8 @@ async def update_host(
             await record(db, user, "host.move", host, details=diff)
 
     before = {"name": host.name, "fqdn": host.fqdn}
+    if {"name", "fqdn"} & fields:
+        scope.require("host.config", ("host", host.id))
     if "name" in fields and body.name is not None:
         host.name = body.name.strip()
     if "fqdn" in fields and body.fqdn is not None:
@@ -160,9 +174,7 @@ async def update_host(
 async def remove_host(
     host_id: str, db: DbSession, scope: Scope, user: CurrentUser
 ) -> None:
-    host = await _get_visible_host(db, scope, host_id)
-    if not scope.all:
-        raise forbidden("Only an administrator can remove hosts")
+    host = await _get_visible_host(db, scope, host_id, "host.manage")
     vm_count = (await _vm_counts(db)).get(host.id, 0)
     await record(db, user, "host.delete", host, details={"vmCount": vm_count})
     # the host's tasks go with it (FK cascade) - close their audit events now
@@ -182,10 +194,8 @@ async def get_host_agent_config(
     host_id: str, db: DbSession, scope: Scope
 ) -> HostAgentConfigOut:
     """The agent `config.ini` for onboarding this host (id + RabbitMQ URL with
-    per-host credentials). Admin-only - it exposes RabbitMQ credentials."""
-    host = await _get_visible_host(db, scope, host_id)
-    if not scope.all:
-        raise forbidden("Only an administrator can view agent credentials")
+    per-host credentials). Needs `host.manage` - it exposes RabbitMQ credentials."""
+    host = await _get_visible_host(db, scope, host_id, "host.manage")
     # (re)assert the RabbitMQ user + permissions every time this is opened - cheap,
     # idempotent, and self-heals a host whose agent still can't connect.
     await provision_host_agent_user(db, host)
@@ -202,11 +212,9 @@ async def get_host_agent_install_url(
 ) -> HostAgentInstallOut:
     """Mint a tokenized `agent-install.ps1` URL for this host plus an elevated-
     PowerShell one-liner that fetches and runs it - the "copy install command"
-    button on the Setup Agent tab. Admin-only; the URL's HMAC token then stands
-    in for a login until it expires (`OVC_AGENT_INSTALL_URL_TTL_SECONDS`)."""
-    host = await _get_visible_host(db, scope, host_id)
-    if not scope.all:
-        raise forbidden("Only an administrator can issue an agent installer URL")
+    button on the Setup Agent tab. Needs `host.manage`; the URL's HMAC token then
+    stands in for a login until it expires (`OVC_AGENT_INSTALL_URL_TTL_SECONDS`)."""
+    host = await _get_visible_host(db, scope, host_id, "host.manage")
     await provision_host_agent_user(db, host)
     url, command, expires_at = await build_agent_install_url(db, host)
     return HostAgentInstallOut(
@@ -260,10 +268,8 @@ async def update_host_agent(
     body: AgentUpgradeRequest | None = None,
 ) -> TaskEnvelope:
     """Queue a `host_update_agent` task - the agent downloads the target build,
-    verifies it, and swaps itself in drain mode. Admin-only."""
-    host = await _get_visible_host(db, scope, host_id)
-    if not scope.all:
-        raise forbidden("Only an administrator can upgrade the agent")
+    verifies it, and swaps itself in drain mode. Needs `host.manage`."""
+    host = await _get_visible_host(db, scope, host_id, "host.manage")
     binary = await resolve_upgrade_binary(db, host, body.binary_id if body else None)
     task = await request_agent_upgrade(db, host, binary=binary, requested_by=user.email)
     await record(
@@ -287,10 +293,10 @@ async def host_action(
     """Queue a host operation on its agent: Failover Cluster node maintenance
     (`suspend`, `suspend_drain`, `resume`, `resume_fallback`), a host `restart`,
     or a forced `refresh_hardware` / `refresh_inventory`. Node maintenance and
-    restart are admin-only."""
-    host = await _get_visible_host(db, scope, host_id)
-    if action in DISRUPTIVE_HOST_ACTIONS and not scope.all:
-        raise forbidden("Only an administrator can change a host's cluster or power state")
+    restart need `host.maintenance`."""
+    host = await _get_visible_host(
+        db, scope, host_id, "host.maintenance" if action in DISRUPTIVE_HOST_ACTIONS else None
+    )
     task = await request_host_action(db, host, action, requested_by=user.email)
     if action not in READ_ONLY_HOST_ACTIONS:
         await record(db, user, f"host.{action}", host, task=task)
@@ -330,6 +336,7 @@ async def list_host_vms(host_id: str, db: DbSession, scope: Scope) -> list[VmOut
             .order_by(Vm.name)
         )
     ).scalars().all()
+    vms = [v for v in vms if scope.vm_visible(v)]
     ids = [v.id for v in vms]
     states = await get_vm_states(ids)
     locks = await get_vm_locks(ids)
@@ -361,3 +368,12 @@ async def list_host_isos(host_id: str, db: DbSession, scope: Scope) -> list[IsoO
         )
     ).scalars().all()
     return [iso_out(i) for i in rows]
+
+
+@router.get("/hosts/{host_id}/console", response_model=ConsoleTargetOut)
+async def get_host_console(host_id: str, db: DbSession, scope: Scope) -> ConsoleTargetOut:
+    """Where the host's remote desktop connects (RDP). Needs `host.console`. OVC
+    only gates whether the console is offered; the host still decides who may
+    sign in (on Hyper-V: its local Remote Desktop / Administrators groups)."""
+    host = await _get_visible_host(db, scope, host_id, "host.console")
+    return ConsoleTargetOut(**console_target(host, port=RDP_PORT))

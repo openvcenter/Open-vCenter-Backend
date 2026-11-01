@@ -21,6 +21,7 @@ from ..messaging import AgentRequest, publish_request
 from ..models import Host, Task, Template, Vm, VmNic
 from ..schemas import VmClone, VmCreate
 from .host_actions import host_is_clustered
+from .rbac import delete_permissions
 from .serializers import agent_connected
 
 log = logging.getLogger(__name__)
@@ -117,6 +118,36 @@ ACTION_MAP: dict[str, tuple[str, str | None]] = {
     # read-only: force the agent to re-inventory just this VM ("force refresh")
     "refresh": ("refresh_status", None),
 }
+
+# action -> privilege it needs on the VM (None: visibility is enough). Extra
+# checks on other objects (migrate destination, export target) are in the route.
+VM_ACTION_PRIVILEGES: dict[str, str | None] = {
+    "start": "vm.power",
+    "stop": "vm.power",
+    "shutdown": "vm.power",
+    "restart": "vm.power",
+    "pause": "vm.power",
+    "delete": "vm.delete",
+    "enable_metrics": "vm.config",
+    "disable_metrics": "vm.config",
+    "rename": "vm.config",
+    "edit": "vm.config",
+    "migrate": "vm.migrate",
+    "move_storage": "vm.migrate",
+    "startup_change": "vm.config",
+    "mount_dvd": "vm.media",
+    "eject_dvd": "vm.media",
+    "enable_ha": "vm.config",
+    "disable_ha": "vm.config",
+    "export_template": "vm.config",
+    "notes_edit": "vm.config",
+    "snapshot_create": "vm.snapshot",
+    "snapshot_remove": "vm.snapshot",
+    "snapshot_restore": "vm.snapshot",
+    "refresh": None,
+}
+# a new action must say which privilege it needs
+assert set(VM_ACTION_PRIVILEGES) == set(ACTION_MAP), "VM_ACTION_PRIVILEGES out of sync"
 
 # Actions that only read VM state - queued without the VM lock so they neither
 # block nor are blocked by a mutating task in flight, and not audited.
@@ -369,6 +400,7 @@ async def remove_vm_from_inventory(db: AsyncSession, vm: Vm) -> None:
         )
     await release_vm_lock(vm.id)
     await clear_vm_state(vm.id)
+    await delete_permissions(db, "vm", [vm.id])
     await db.delete(vm)
     await db.flush()
     log.info("removed vm=%s (%s) from inventory", vm.id, vm.vm_uuid)

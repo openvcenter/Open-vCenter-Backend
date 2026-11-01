@@ -8,7 +8,7 @@ from .folder import Folder
 from .host import DEFAULT_HYPERVISOR, Host, Hypervisor
 from .image import Iso, Template
 from .metric import HostMetric, VmMetric
-from .rbac import ScopeGrant, User
+from .rbac import Permission, Role, RolePrivilege, User
 from .tag import (
     DEFAULT_TAG_COLOR,
     TAG_COLORS,
@@ -37,7 +37,9 @@ __all__ = [
     "Template",
     "HostMetric",
     "VmMetric",
-    "ScopeGrant",
+    "Permission",
+    "Role",
+    "RolePrivilege",
     "User",
     "Tag",
     "TagCategory",

@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query
 
+from ...models import Vm
 from ...schemas import AuditEventOut, AuditEventPage
 from ...services.audit import AuditFilter, list_events
 from ..deps import DbSession, Scope
@@ -23,6 +24,27 @@ def _aware(value: datetime | None) -> datetime | None:
 
 def _str(value: UUID | None) -> str | None:
     return str(value) if value is not None else None
+
+
+async def _require_object_audit(
+    db: DbSession,
+    scope: Scope,
+    target_type: str | None,
+    target_id: UUID | None,
+    host_id: UUID | None,
+    cluster_id: UUID | None,
+) -> None:
+    if cluster_id is not None:
+        return scope.require("audit.read", ("cluster", str(cluster_id)))
+    if host_id is not None:
+        return scope.require("audit.read", ("host", str(host_id)))
+    if target_id is not None:
+        oid = str(target_id)
+        if target_type in (None, "vm") and (vm := await db.get(Vm, oid)) is not None:
+            return scope.require_vm("audit.read", vm)
+        if target_type in ("cluster", "host", "folder"):
+            return scope.require("audit.read", (target_type, oid))
+    raise forbidden("Missing privilege 'audit.read'")
 
 
 @router.get("/audit-events", response_model=AuditEventPage)
@@ -58,9 +80,11 @@ async def get_audit_events(
         str | None, Query(description="`nextCursor` of the previous page")
     ] = None,
 ) -> AuditEventPage:
-    """The audit log, newest first. Admin only."""
-    if not scope.all:
-        raise forbidden("Only an administrator can view the audit log")
+    """The audit log, newest first. Needs `audit.read` globally - or on the
+    object a `targetId` / `hostId` / `clusterId` filter narrows it to (the
+    per-object Events tabs)."""
+    if not scope.can("audit.read"):
+        await _require_object_audit(db, scope, target_type, target_id, host_id, cluster_id)
     rows, next_cursor = await list_events(
         db,
         AuditFilter(

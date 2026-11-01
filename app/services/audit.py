@@ -26,6 +26,8 @@ from ..models import (
     Cluster,
     Folder,
     Host,
+    Permission,
+    Role,
     Tag,
     TagCategory,
     Task,
@@ -37,7 +39,7 @@ from ..models import (
 # Shown as the actor of worker-side events.
 SYSTEM_ACTOR_NAME = "Open vCenter"
 
-Target = Vm | Host | Cluster | Folder | Vlan | Tag | TagCategory | AgentBinary
+Target = Vm | Host | Cluster | Folder | Vlan | Tag | TagCategory | AgentBinary | Role | Permission
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,17 @@ def _ref(target: Target) -> _TargetRef:
         return _TargetRef("tag_category", target.id, target.name)
     if isinstance(target, AgentBinary):
         return _TargetRef("agent_binary", target.id, target.version)
+    if isinstance(target, Role):
+        return _TargetRef("role", target.id, target.name)
+    if isinstance(target, Permission):
+        # on a host / cluster it shows in that object's Events tab
+        return _TargetRef(
+            "permission",
+            target.id,
+            f"{target.principal_type}:{target.principal_id}",
+            target.scope_id if target.scope_type == "host" else None,
+            target.scope_id if target.scope_type == "cluster" else None,
+        )
     raise TypeError(f"not an auditable target: {type(target).__name__}")
 
 

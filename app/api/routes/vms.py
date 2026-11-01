@@ -18,6 +18,7 @@ from ...cache import (
 from ...config import get_settings
 from ...models import Folder, Host, Task, Template, Vm, VmMetric, VmThumbnail
 from ...schemas import (
+    ConsoleTargetOut,
     TaskEnvelope,
     VmActionRequest,
     VmClone,
@@ -30,13 +31,14 @@ from ...schemas import (
     VmTagsUpdate,
 )
 from ...services.audit import changes, record
+from ...services.console import HYPERV_CONSOLE_PORT, console_target
 from ...services.organization import move_vm_to_folder
-from ...services.rbac import vm_visible
 from ...services.serializers import agent_connected, task_out, vm_metric_out, vm_out
 from ...services.tags import set_vm_tags
 from ...services.vms import (
     ACTION_MAP,
     READ_ONLY_VM_ACTIONS,
+    VM_ACTION_PRIVILEGES,
     remove_vm_from_inventory,
     request_vm_action,
     request_vm_clone,
@@ -86,7 +88,7 @@ async def list_vms(
     if state is not None:
         stmt = stmt.where(Vm.state == state)
 
-    vms = [v for v in (await db.execute(stmt)).scalars().all() if vm_visible(scope, v)]
+    vms = [v for v in (await db.execute(stmt)).scalars().all() if scope.vm_visible(v)]
     ids = [v.id for v in vms]
     states = await get_vm_states(ids)
     locks = await get_vm_locks(ids)
@@ -117,8 +119,7 @@ async def create_vm(
     host = await db.get(Host, body.host_id)
     if host is None:
         raise not_found("Host")
-    if not scope.sees_host(host.id):
-        raise forbidden("You cannot create a VM on this host")
+    scope.require("vm.create", ("host", host.id))
     vm, task = await request_vm_create(db, host, body, requested_by=user.email)
     await record(
         db,
@@ -141,7 +142,10 @@ async def _folder_ref(db: DbSession, folder_id: str | None) -> dict | None:
     return {"id": folder_id, "name": folder.name if folder else None}
 
 
-async def _get_visible_vm(db: DbSession, scope: Scope, vm_id: str) -> Vm:
+async def _get_visible_vm(
+    db: DbSession, scope: Scope, vm_id: str, privilege: str | None = None
+) -> Vm:
+    """The VM, if the caller sees it (and holds `privilege` on it)."""
     vm = (
         await db.execute(
             select(Vm)
@@ -151,28 +155,63 @@ async def _get_visible_vm(db: DbSession, scope: Scope, vm_id: str) -> Vm:
     ).scalar_one_or_none()
     if vm is None:
         raise not_found("VM")
-    if not vm_visible(scope, vm):
+    if not scope.vm_visible(vm):
         raise forbidden()
+    if privilege is not None:
+        scope.require_vm(privilege, vm)
     return vm
+
+
+async def _require_migrate_target(db: DbSession, scope: Scope, vm: Vm, target: object) -> None:
+    """A VM may only move where the caller could create one: `vm.create` on the
+    destination node (matched by name / FQDN within the VM's cluster), or on
+    the cluster when the node is not a known host."""
+    name = str(target or "").strip().lower()
+    hosts = (
+        (await db.execute(select(Host).where(Host.cluster_id == vm.cluster_id))).scalars().all()
+        if vm.cluster_id and name
+        else []
+    )
+    host = next(
+        (
+            h
+            for h in hosts
+            if h.name.lower() == name or (h.fqdn or "").lower().split(".")[0] == name
+            or (h.fqdn or "").lower() == name
+        ),
+        None,
+    )
+    if host is not None:
+        scope.require("vm.create", ("host", host.id))
+    elif vm.cluster_id:
+        scope.require("vm.create", ("cluster", vm.cluster_id))
+    else:
+        scope.require("vm.create")
 
 
 @router.get("/vm-locks", response_model=list[VmLockEntry])
 async def list_locks(db: DbSession, scope: Scope) -> list[VmLockEntry]:
-    """Every VM currently locked by a running operation. Admin only - this is a
-    cross-scope view for unsticking stale locks."""
-    if not scope.all:
-        raise forbidden("Only administrators can view VM locks")
+    """Every VM currently locked by a running operation, for unsticking stale
+    locks. Lists the locks of VMs the caller holds `task.cancel` on (all of
+    them with `task.cancel` globally, including locks of VMs already gone)."""
     locks = await list_vm_locks()
     if not locks:
         return []
 
     vm_ids = [lk["vm_id"] for lk in locks]
-    names = {
-        r.id: r.name
-        for r in (
-            await db.execute(select(Vm.id, Vm.name).where(Vm.id.in_(vm_ids)))
-        ).all()
+    vms = {
+        v.id: v
+        for v in (
+            await db.execute(select(Vm).where(Vm.id.in_(vm_ids)).options(noload("*")))
+        ).scalars()
     }
+    if not scope.can("task.cancel"):
+        locks = [
+            lk
+            for lk in locks
+            if lk["vm_id"] in vms and scope.can_vm("task.cancel", vms[lk["vm_id"]])
+        ]
+    names = {vm_id: v.name for vm_id, v in vms.items()}
     task_ids = [lk["task_id"] for lk in locks]
     statuses = {
         r.id: r.status
@@ -200,8 +239,7 @@ async def list_locks(db: DbSession, scope: Scope) -> list[VmLockEntry]:
 @router.delete("/vm-locks", status_code=status.HTTP_200_OK)
 async def release_locks(db: DbSession, scope: Scope, user: CurrentUser) -> dict:
     """Force-release every VM lock. Use only when locks are known to be stale."""
-    if not scope.all:
-        raise forbidden("Only administrators can release VM locks")
+    scope.require("task.cancel")
     released = await release_all_vm_locks()
     await record(
         db, user, "vm.lock_release_all", target_type="vm", details={"released": released}
@@ -214,15 +252,17 @@ async def release_lock(
     vm_id: str, db: DbSession, scope: Scope, user: CurrentUser
 ) -> dict:
     """Force-release one VM's lock (stale-lock recovery). Works even if the VM
-    row is already gone."""
-    if not scope.all:
-        raise forbidden("Only administrators can release VM locks")
+    row is already gone (then `task.cancel` is needed globally)."""
+    vm = (
+        await db.execute(select(Vm).where(Vm.id == vm_id).options(noload("*")))
+    ).scalar_one_or_none()
+    if vm is None:
+        scope.require("task.cancel")
+    else:
+        scope.require_vm("task.cancel", vm)
     held = await get_vm_lock(vm_id)
     released = await release_vm_lock(vm_id)
     if released:
-        vm = (
-            await db.execute(select(Vm).where(Vm.id == vm_id).options(noload("*")))
-        ).scalar_one_or_none()
         if vm is not None:
             await record(db, user, "vm.lock_release", vm, details={"lock": held})
     return {"released": bool(released)}
@@ -236,6 +276,26 @@ async def get_vm(vm_id: str, db: DbSession, scope: Scope) -> VmOut:
         await get_vm_state(vm.id),
         await get_vm_lock(vm.id),
         host_offline=await _host_offline(db, vm.host_id),
+    )
+
+
+@router.get("/vms/{vm_id}/console", response_model=ConsoleTargetOut)
+async def get_vm_console(vm_id: str, db: DbSession, scope: Scope) -> ConsoleTargetOut:
+    """Where the VM console connects (Hyper-V VMConnect on the VM's host). Needs
+    `vm.console`. OVC only gates whether the console is offered; the host still
+    decides who may sign in (on Hyper-V: its Hyper-V Administrators group)."""
+    vm = await _get_visible_vm(db, scope, vm_id, "vm.console")
+    if not vm.vm_uuid:
+        raise ApiError(
+            "CONSOLE_UNAVAILABLE",
+            "The host agent has not reported this VM yet",
+            status_code=409,
+        )
+    host = await db.get(Host, vm.host_id)
+    if host is None:
+        raise not_found("Host")
+    return ConsoleTargetOut(
+        **console_target(host, port=HYPERV_CONSOLE_PORT, vm_guid=vm.vm_uuid)
     )
 
 
@@ -278,7 +338,7 @@ async def get_vm_thumbnail(vm_id: str, db: DbSession, scope: Scope) -> Response:
     ).scalar_one_or_none()
     if vm is None:
         raise not_found("VM")
-    if not vm_visible(scope, vm):
+    if not scope.vm_visible(vm):
         raise forbidden()
 
     thumb = await db.get(VmThumbnail, vm_id)
@@ -299,8 +359,13 @@ async def move_vm(
     vm_id: str, body: VmMove, db: DbSession, scope: Scope, user: CurrentUser
 ) -> VmOut:
     """Move the VM into a folder (folderId) or out of any folder (folderId=null).
-    This is a purely logical operation - no agent request."""
-    vm = await _get_visible_vm(db, scope, vm_id)
+    This is a purely logical operation - no agent request. Needs `vm.config` on
+    the VM and `vm.create` on the destination (the folder, or the VM's host)."""
+    vm = await _get_visible_vm(db, scope, vm_id, "vm.config")
+    scope.require(
+        "vm.create",
+        ("folder", body.folder_id) if body.folder_id else ("host", vm.host_id),
+    )
     before = await _folder_ref(db, vm.folder_id)
     vm = await move_vm_to_folder(db, vm, body.folder_id)
     after = await _folder_ref(db, vm.folder_id)
@@ -318,10 +383,9 @@ async def move_vm(
 async def put_vm_tags(
     vm_id: str, body: VmTagsUpdate, db: DbSession, scope: Scope, user: CurrentUser
 ) -> VmOut:
-    """Replace the VM's tags (at most one per category). Any user who can see the
-    VM may tag it; a DB-only change, allowed even while the VM is locked or its
-    host is offline."""
-    vm = await _get_visible_vm(db, scope, vm_id)
+    """Replace the VM's tags (at most one per category). Needs `vm.config`; a
+    DB-only change, allowed even while the VM is locked or its host is offline."""
+    vm = await _get_visible_vm(db, scope, vm_id, "vm.config")
     before = sorted(t.name for t in vm.tags)
     vm = await set_vm_tags(db, vm, body.tag_ids)
     if diff := changes({"tags": before}, {"tags": sorted(t.name for t in vm.tags)}):
@@ -353,7 +417,12 @@ async def vm_action(
             f"Unknown VM action '{action}'",
             status.HTTP_404_NOT_FOUND,
         )
-    vm = await _get_visible_vm(db, scope, vm_id)
+    vm = await _get_visible_vm(db, scope, vm_id, VM_ACTION_PRIVILEGES[action])
+    params = body.params if body else None
+    if action == "migrate":
+        await _require_migrate_target(db, scope, vm, (params or {}).get("target_host"))
+    elif action == "export_template":
+        scope.require("vm.create", ("host", vm.host_id))
     task = await request_vm_action(
         db,
         vm,
@@ -387,8 +456,10 @@ async def clone_vm(
     host = await db.get(Host, body.host_id)
     if host is None:
         raise not_found("Host")
-    if not scope.sees_host(host.id):
-        raise forbidden("You cannot create a VM on this host")
+    scope.require("vm.create", ("host", host.id))
+    source_vm = await db.get(Vm, body.source_vm_id) if body.source == "vm" else None
+    if source_vm is not None and not scope.vm_visible(source_vm):
+        raise forbidden()
     vm, task = await request_vm_clone(db, body, host, requested_by=user.email)
     details = body.model_dump(mode="json", by_alias=True, exclude_none=True)
     source = (
@@ -418,7 +489,7 @@ async def delete_vm(
         "(irreversible). Default: only remove the VM from Hyper-V.",
     ),
 ) -> TaskEnvelope:
-    vm = await _get_visible_vm(db, scope, vm_id)
+    vm = await _get_visible_vm(db, scope, vm_id, "vm.delete")
     task = await request_vm_action(
         db,
         vm,
@@ -439,7 +510,7 @@ async def forget_vm(
     """Remove the VM record from the database only - no agent request. For a VM
     left ``Unknown`` on a host that is gone for good. Refused (409 `HOST_ONLINE`)
     while the host agent is still reporting the VM."""
-    vm = await _get_visible_vm(db, scope, vm_id)
+    vm = await _get_visible_vm(db, scope, vm_id, "vm.delete")
     await record(db, user, "vm.forget", vm)
     await remove_vm_from_inventory(db, vm)
     return {"removed": True}

@@ -51,8 +51,7 @@ async def list_clusters(db: DbSession, scope: Scope) -> list[ClusterOut]:
 async def add_cluster(
     body: ClusterCreate, db: DbSession, scope: Scope, user: CurrentUser
 ) -> ClusterOut:
-    if not scope.all:
-        raise forbidden("Only an administrator can create clusters")
+    scope.require("cluster.manage")
     cluster = await create_cluster(db, name=body.name, hypervisor=body.hypervisor)
     await record(
         db, user, "cluster.create", cluster, details={"hypervisor": cluster.hypervisor}
@@ -65,17 +64,18 @@ async def get_cluster(cluster_id: str, db: DbSession, scope: Scope) -> ClusterOu
     cluster = await db.get(Cluster, cluster_id)
     if cluster is None:
         raise not_found("Cluster")
-    if not scope.sees_cluster(cluster.id):
+    if not await scope.sees_cluster_context(db, cluster.id):
         raise forbidden()
     return _cluster_out(cluster, await _counts(db))
 
 
 async def _admin_cluster(db: DbSession, scope: Scope, cluster_id: str) -> Cluster:
-    if not scope.all:
-        raise forbidden("Only an administrator can manage clusters")
     cluster = await db.get(Cluster, cluster_id)
     if cluster is None:
         raise not_found("Cluster")
+    if not scope.sees_cluster(cluster.id):
+        raise forbidden()
+    scope.require("cluster.manage", ("cluster", cluster.id))
     return cluster
 
 

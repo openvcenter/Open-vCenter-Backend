@@ -68,7 +68,10 @@ class Settings(BaseSettings):
     #   Keycloak realm roles           : realm_access.roles
     #   Auth0 / Okta / flat claim      : roles  (or "https://ovc.example/roles")
     oidc_roles_claim: str = "resource_access.${client_id}.roles"
-    # this role bypasses every scope filter (full access, no ScopeGrant needed)
+    # dot-path to the groups array in the token (same syntax as oidc_roles_claim).
+    # Roles and groups are the principals permissions are granted to.
+    oidc_groups_claim: str = "groups"
+    # this role is a superuser: every privilege everywhere, no permission needed
     admin_role: str = "ADMINISTRATOR"
     # seconds a fetched JWKS document is cached before re-download
     oidc_jwks_ttl_seconds: int = 3600

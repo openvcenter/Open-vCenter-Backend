@@ -18,14 +18,6 @@ from ..errors import forbidden, not_found
 router = APIRouter(tags=["folders"])
 
 
-def _visible(scope: Scope, folder: Folder) -> bool:
-    return (
-        scope.all
-        or (folder.cluster_id is not None and scope.sees_cluster(folder.cluster_id))
-        or (folder.host_id is not None and scope.sees_host(folder.host_id))
-    )
-
-
 @router.get("/folders", response_model=list[FolderOut])
 async def list_folders(
     db: DbSession,
@@ -39,20 +31,17 @@ async def list_folders(
     if cluster_id is not None:
         stmt = stmt.where(Folder.cluster_id == cluster_id)
     folders = (await db.execute(stmt)).scalars().all()
-    return [folder_out(f) for f in folders if _visible(scope, f)]
+    return [folder_out(f) for f in folders if scope.sees_folder(f.id)]
 
 
 @router.post("/folders", response_model=FolderOut, status_code=status.HTTP_201_CREATED)
 async def add_folder(
     body: FolderCreate, db: DbSession, scope: Scope, user: CurrentUser
 ) -> FolderOut:
-    allowed = scope.all
-    if body.cluster_id:
-        allowed = allowed or scope.sees_cluster(body.cluster_id)
-    if body.host_id:
-        allowed = allowed or scope.sees_host(body.host_id)
-    if not allowed:
-        raise forbidden("You cannot create a folder here")
+    scope.require(
+        "folder.manage",
+        ("cluster", body.cluster_id) if body.cluster_id else ("host", body.host_id),
+    )
     folder = await create_folder(
         db, name=body.name, cluster_id=body.cluster_id, host_id=body.host_id
     )
@@ -60,12 +49,13 @@ async def add_folder(
     return folder_out(folder)
 
 
-async def _get_visible_folder(db: DbSession, scope: Scope, folder_id: str) -> Folder:
+async def _managed_folder(db: DbSession, scope: Scope, folder_id: str) -> Folder:
     folder = await db.get(Folder, folder_id)
     if folder is None:
         raise not_found("Folder")
-    if not _visible(scope, folder):
+    if not scope.sees_folder(folder.id):
         raise forbidden()
+    scope.require("folder.manage", ("folder", folder.id))
     return folder
 
 
@@ -73,7 +63,7 @@ async def _get_visible_folder(db: DbSession, scope: Scope, folder_id: str) -> Fo
 async def patch_folder(
     folder_id: str, body: FolderUpdate, db: DbSession, scope: Scope, user: CurrentUser
 ) -> FolderOut:
-    folder = await _get_visible_folder(db, scope, folder_id)
+    folder = await _managed_folder(db, scope, folder_id)
     before = folder.name
     folder = await rename_folder(db, folder, body.name)
     if diff := changes({"name": before}, {"name": folder.name}):
@@ -85,7 +75,7 @@ async def patch_folder(
 async def remove_folder(
     folder_id: str, db: DbSession, scope: Scope, user: CurrentUser
 ) -> Response:
-    folder = await _get_visible_folder(db, scope, folder_id)
+    folder = await _managed_folder(db, scope, folder_id)
     event = await record(db, user, "folder.delete", folder)
     event.details = {"vmsDetached": await delete_folder(db, folder)}
     return Response(status_code=status.HTTP_204_NO_CONTENT)
