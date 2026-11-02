@@ -22,7 +22,7 @@ PRIVILEGES: dict[str, tuple[str, str]] = {
     "host.maintenance": ("Host", "Suspend, drain, resume, restart"),
     "host.config": ("Host", "Edit host settings and VLANs"),
     "host.manage": ("Host", "Add, remove and move hosts, manage agents"),
-    "host.console": ("Host", "Open host remote desktop"),
+    "host.console": ("Host", "Open the host remote console"),
     "cluster.manage": ("Cluster", "Create, edit and delete clusters"),
     "folder.manage": ("Inventory", "Create, rename and delete folders"),
     "tag.manage": ("Inventory", "Manage the tag catalog"),
