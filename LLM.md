@@ -246,11 +246,12 @@ are rows). Use `scope.require("<priv>", ("host", id))` /
 `scope.require_vm("<priv>", vm)`; lists use `sees_*` / `vm_visible` / `vm_clause()`.
 A new VM action must be added to `VM_ACTION_PRIVILEGES`.
 
-**Self-management is global-only**: creating, renaming, moving and removing a
-host or a cluster, and host onboarding (agent config / install URL), check the
-privilege on `GLOBAL` (`scope.require("host.manage")`), not on the object. A
-permission on a host / cluster covers what is inside it (VMs, folders, VLANs)
-and operating it (maintenance, console, agent update), never the object itself.
+**An object is managed from above it**: creating, renaming, moving and removing
+a host or a cluster, and host onboarding (agent config / install URL), check the
+privilege on `GLOBAL` (`scope.require("host.manage")`); renaming or deleting a
+folder checks `folder.manage` on its cluster / standalone host. A permission on
+a host / cluster / folder covers what is inside it (and operating a host:
+maintenance, console, agent update), never the object itself.
 
 Creating a permission needs `rbac.manage` on its object, and the role may only
 contain privileges the granter holds there (`ROLE_EXCEEDS_GRANTER`). Deleting a

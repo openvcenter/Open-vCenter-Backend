@@ -274,3 +274,11 @@ async def test_cluster_admin_cannot_manage_the_cluster_or_its_hosts(
     async with client_as(access) as client:
         resp = await client.request(method, url, json=body)
     assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.parametrize(("method", "body"), [("PATCH", {"name": "renamed"}), ("DELETE", None)])
+async def test_folder_admin_cannot_rename_or_delete_the_folder(client_as, method, body) -> None:
+    access = _access(_perm(("folder", "f-1"), {"folder.manage", "vm.create", "vm.config"}))
+    async with client_as(access) as client:
+        resp = await client.request(method, "/api/folders/f-1", json=body)
+    assert resp.status_code == 403, resp.text

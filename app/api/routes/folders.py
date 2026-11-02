@@ -13,7 +13,7 @@ from ...services.organization import (
 )
 from ...services.serializers import folder_out
 from ..deps import CurrentUser, DbSession, Scope
-from ..errors import forbidden, not_found
+from ..errors import not_found
 
 router = APIRouter(tags=["folders"])
 
@@ -53,9 +53,11 @@ async def _managed_folder(db: DbSession, scope: Scope, folder_id: str) -> Folder
     folder = await db.get(Folder, folder_id)
     if folder is None:
         raise not_found("Folder")
-    if not scope.sees_folder(folder.id):
-        raise forbidden()
-    scope.require("folder.manage", ("folder", folder.id))
+    # renaming / deleting a folder is managed from where it lives (its cluster or
+    # standalone host, or above): a permission on the folder covers its VMs,
+    # never the folder itself
+    owner = ("cluster", folder.cluster_id) if folder.cluster_id else ("host", folder.host_id)
+    scope.require("folder.manage", owner)
     return folder
 
 
