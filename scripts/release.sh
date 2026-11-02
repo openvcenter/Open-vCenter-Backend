@@ -24,6 +24,6 @@ if n != 1:
 p.write_text(s)
 PY
 
-git commit -q -am "Release $v"
+git commit -q -am "🔖 Release $v"
 git tag -a "$v" -m "Release $v"
 echo "Tagged $v. Push with: git push origin main --follow-tags"

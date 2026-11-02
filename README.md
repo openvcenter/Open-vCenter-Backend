@@ -221,10 +221,10 @@ to `main` still publishes `:latest`).
    under a new `## [0.1.2] - YYYY-MM-DD` heading (Added / Changed / Fixed),
    from `git log --oneline <previous-tag>..main`. Leave `## [Unreleased]` empty
    above it and update the compare links at the bottom. Commit it:
-   `git commit -am "Changelog for 0.1.2"`.
+   `git commit -am "📝 Changelog for 0.1.2"`.
 3. **Bump and tag**: `scripts/release.sh 0.1.2`. It checks the tree is clean
    and the changelog has the section, sets `pyproject.toml`'s version, commits
-   it as `Release 0.1.2` and creates the annotated tag `0.1.2`.
+   it as `🔖 Release 0.1.2` and creates the annotated tag `0.1.2`.
 4. **Push**: `git push origin main --follow-tags`. CI builds and publishes the
    `:0.1.2` image from the tag.
 5. **GitHub Release**: create it from the tag, titled with the version and the
