@@ -20,6 +20,7 @@ from ..api.errors import ApiError
 from ..ids import new_id
 from ..messaging import AgentRequest, publish_request
 from ..models import AgentBinary, Host, Task
+from ..task_timeouts import task_timeouts
 from .agent_store import get_agent_store
 from .serializers import agent_connected
 
@@ -105,6 +106,7 @@ async def request_agent_upgrade(
             status_code=409,
         )
 
+    timeouts = task_timeouts("host_update_agent")
     task = Task(
         id=new_id(),
         kind="host_update_agent",
@@ -115,6 +117,7 @@ async def request_agent_upgrade(
         host_id=host.id,
         requested_by=requested_by,
         progress=0,
+        timeout_seconds=timeouts.backend,
     )
     task.correlation_id = task.id
     db.add(task)
@@ -128,6 +131,7 @@ async def request_agent_upgrade(
             "version": binary.version,
         },
         requested_by=requested_by,
+        timeout_seconds=timeouts.agent,
     )
     task.request_payload = request.model_dump(mode="json")
     await db.flush()

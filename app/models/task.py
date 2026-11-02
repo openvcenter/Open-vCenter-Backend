@@ -35,6 +35,10 @@ class Task(Base, TimestampMixin):
     # last human-readable step reported by the agent while status == "running"
     progress_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # backend deadline (seconds from created_at) computed when the task is queued
+    # (app.task_timeouts); the timeout sweeper flips the task to "timeout" after it
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -146,6 +146,7 @@ async def _sweep_stale_tasks() -> None:
                     Task.target_type,
                     Task.target_id,
                     Task.created_at,
+                    Task.timeout_seconds,
                 )
                 .where(Task.status.notin_(TERMINAL_TASK_STATUSES))
                 .where(Task.created_at < default_cutoff)
@@ -155,7 +156,8 @@ async def _sweep_stale_tasks() -> None:
             t
             for t in rows
             if t.created_at
-            < now - timedelta(seconds=task_timeout_seconds(t.kind))
+            < now
+            - timedelta(seconds=t.timeout_seconds or task_timeout_seconds(t.kind))
         ]
         if stale:
             stale_ids = [t.id for t in stale]

@@ -21,6 +21,7 @@ from ..api.errors import ApiError
 from ..ids import new_id
 from ..messaging import AgentRequest, AgentResponse, publish_request
 from ..models import Host, Task
+from ..task_timeouts import task_timeouts
 from .serializers import agent_connected
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ async def request_host_action(
                 details={"taskId": existing.id},
             )
 
+    timeouts = task_timeouts(action)
     task = Task(
         id=new_id(),
         kind=action,
@@ -91,12 +93,17 @@ async def request_host_action(
         host_id=host.id,
         requested_by=requested_by,
         progress=0,
+        timeout_seconds=timeouts.backend,
     )
     task.correlation_id = task.id
     db.add(task)
 
     request = AgentRequest(
-        id=task.id, function=action, params={}, requested_by=requested_by
+        id=task.id,
+        function=action,
+        params={},
+        requested_by=requested_by,
+        timeout_seconds=timeouts.agent,
     )
     task.request_payload = request.model_dump(mode="json")
     await db.flush()

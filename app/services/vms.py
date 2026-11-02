@@ -20,6 +20,7 @@ from ..ids import new_id
 from ..messaging import AgentRequest, publish_request
 from ..models import Host, Task, Template, Vm, VmNic
 from ..schemas import VmClone, VmCreate
+from ..task_timeouts import DiskSize, task_timeouts
 from .host_actions import host_is_clustered
 from .rbac import delete_permissions
 from .serializers import agent_connected
@@ -162,6 +163,19 @@ async def count_host_vms(db: AsyncSession, host_id: str) -> int:
     ).scalar_one()
 
 
+def _disk_sizes(vm: Vm) -> list[DiskSize]:
+    """The VM's disks as the timeout budget sees them (passthrough disks are not
+    copied)."""
+    out = []
+    for d in vm.disks:
+        if d.format == "passthrough":
+            continue
+        size = d.size_bytes or 0
+        used = d.used_bytes if d.used_bytes is not None else size
+        out.append(DiskSize(size, used, d.type == "Fixed"))
+    return out
+
+
 async def _queue_vm_task(
     db: AsyncSession,
     vm: Vm,
@@ -183,10 +197,15 @@ async def _queue_vm_task(
     _require_host_online(host)
 
     task_id = new_id()
+    timeouts = task_timeouts(function, params, disks=_disk_sizes(vm))
     # Read-only tasks (a forced inventory refresh) don't take the VM lock: they
     # must not block - nor be blocked by - a mutating operation in flight.
     if lock and not await acquire_vm_lock(
-        vm.id, task_id=task_id, kind=function, requested_by=requested_by
+        vm.id,
+        task_id=task_id,
+        kind=function,
+        requested_by=requested_by,
+        timeout_seconds=timeouts.backend,
     ):
         held = await get_vm_lock(vm.id) or {}
         raise vm_locked(vm.name, held)
@@ -202,6 +221,7 @@ async def _queue_vm_task(
             host_id=vm.host_id,
             requested_by=requested_by,
             progress=0,
+            timeout_seconds=timeouts.backend,
         )
         task.correlation_id = task.id
         db.add(task)
@@ -221,6 +241,7 @@ async def _queue_vm_task(
             # must never shadow vm_id
             params={**params, "vm_id": vm.vm_uuid},
             requested_by=requested_by,
+            timeout_seconds=timeouts.agent,
         )
         task.request_payload = request.model_dump(mode="json")
         await publish_request(host.short_id, request)
@@ -325,11 +346,40 @@ async def request_vm_create(
         )
     await db.flush()
 
+    params = {
+        "name": body.name,
+        "destination_storage": destination_storage,
+        "os": body.os,
+        "notes": vm.notes or "",
+        "firmware": body.firmware,
+        "cpu_count": body.cpu_count,
+        "memory_mb": body.memory_mb,
+        "memory_dynamic": body.memory_dynamic,
+        "memory_min_mb": body.memory_min_mb,
+        "memory_max_mb": body.memory_max_mb,
+        "nested_virtualization": body.nested_virtualization,
+        "vlan_id": body.vlan_id,
+        "switch_name": body.switch_name or None,
+        "dvd": body.dvd or None,
+        "ha_enabled": body.ha_enabled and host.cluster_id is not None,
+        "cluster": host.cluster_id if body.ha_enabled else None,
+        "start_now": body.start_now,
+        "disks": [
+            {"name": d.name, "type": d.type, "size_gb": d.size_gb}
+            for d in body.disks
+        ],
+    }
+    timeouts = task_timeouts("vm_create", params)
+
     task_id = new_id()
     # a fresh VM can't already be locked, but keep the invariant "a mutating
     # task ⇒ the VM is locked" so nothing races the create either.
     await acquire_vm_lock(
-        vm.id, task_id=task_id, kind="vm_create", requested_by=requested_by
+        vm.id,
+        task_id=task_id,
+        kind="vm_create",
+        requested_by=requested_by,
+        timeout_seconds=timeouts.backend,
     )
     task = Task(
         id=task_id,
@@ -341,6 +391,7 @@ async def request_vm_create(
         host_id=host.id,
         requested_by=requested_by,
         progress=0,
+        timeout_seconds=timeouts.backend,
     )
     task.correlation_id = task.id
     db.add(task)
@@ -348,30 +399,9 @@ async def request_vm_create(
     request = AgentRequest(
         id=task.id,
         function="vm_create",
-        params={
-            "name": body.name,
-            "destination_storage": destination_storage,
-            "os": body.os,
-            "notes": vm.notes or "",
-            "firmware": body.firmware,
-            "cpu_count": body.cpu_count,
-            "memory_mb": body.memory_mb,
-            "memory_dynamic": body.memory_dynamic,
-            "memory_min_mb": body.memory_min_mb,
-            "memory_max_mb": body.memory_max_mb,
-            "nested_virtualization": body.nested_virtualization,
-            "vlan_id": body.vlan_id,
-            "switch_name": body.switch_name or None,
-            "dvd": body.dvd or None,
-            "ha_enabled": body.ha_enabled and host.cluster_id is not None,
-            "cluster": host.cluster_id if body.ha_enabled else None,
-            "start_now": body.start_now,
-            "disks": [
-                {"name": d.name, "type": d.type, "size_gb": d.size_gb}
-                for d in body.disks
-            ],
-        },
+        params=params,
         requested_by=requested_by,
+        timeout_seconds=timeouts.agent,
     )
     task.request_payload = request.model_dump(mode="json")
     await db.flush()
@@ -466,6 +496,7 @@ async def request_vm_clone(
             "clone_type": "imported",
             "source_vm_name": source_vm.name,
         }
+        clone_disks = _disk_sizes(source_vm)
     else:
         template = await db.get(Template, body.template_id)
         if template is None:
@@ -491,6 +522,10 @@ async def request_vm_clone(
             "source_export_path": template.path,
             "expand_disks": body.expand_disks,
         }
+        # exported templates hold Dynamic disks (vm_export_template converts them)
+        clone_disks = [
+            DiskSize(template.size_bytes, template.disk_size_bytes, fixed=False)
+        ]
 
     vm = Vm(
         id=new_id(),
@@ -527,8 +562,13 @@ async def request_vm_clone(
     await db.flush()
 
     task_id = new_id()
+    timeouts = task_timeouts("vm_clone", clone_params, disks=clone_disks)
     await acquire_vm_lock(
-        vm.id, task_id=task_id, kind="vm_clone", requested_by=requested_by
+        vm.id,
+        task_id=task_id,
+        kind="vm_clone",
+        requested_by=requested_by,
+        timeout_seconds=timeouts.backend,
     )
     task = Task(
         id=task_id,
@@ -540,6 +580,7 @@ async def request_vm_clone(
         host_id=host.id,
         requested_by=requested_by,
         progress=0,
+        timeout_seconds=timeouts.backend,
     )
     task.correlation_id = task.id
     db.add(task)
@@ -560,6 +601,7 @@ async def request_vm_clone(
             "start_now": body.start_now,
         },
         requested_by=requested_by,
+        timeout_seconds=timeouts.agent,
     )
     task.request_payload = request.model_dump(mode="json")
     await db.flush()

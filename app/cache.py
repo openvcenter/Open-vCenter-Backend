@@ -78,15 +78,20 @@ return 0
 """
 
 
-def _lock_ttl(kind: str | None = None) -> int:
+def _lock_ttl(kind: str | None = None, timeout_seconds: int | None = None) -> int:
     # Backstop only - apply_response / the timeout sweeper free the lock the
-    # moment the task ends. Sized per kind so a legitimately long task (a
-    # graceful shutdown, a storage migration) never outlives its own lock.
-    return task_timeout_seconds(kind) + 60
+    # moment the task ends. Sized to the task's deadline so a legitimately long
+    # task (a graceful shutdown, a large Fixed disk) never outlives its own lock.
+    return (timeout_seconds or task_timeout_seconds(kind)) + 60
 
 
 async def acquire_vm_lock(
-    vm_id: str, *, task_id: str, kind: str, requested_by: str
+    vm_id: str,
+    *,
+    task_id: str,
+    kind: str,
+    requested_by: str,
+    timeout_seconds: int | None = None,
 ) -> bool:
     """Take the lock for `vm_id`. Returns False if another task already holds it."""
     payload = json.dumps(
@@ -98,7 +103,7 @@ async def acquire_vm_lock(
         }
     )
     ok = await get_cache().set(
-        _vm_lock_key(vm_id), payload, ex=_lock_ttl(kind), nx=True
+        _vm_lock_key(vm_id), payload, ex=_lock_ttl(kind, timeout_seconds), nx=True
     )
     return bool(ok)
 

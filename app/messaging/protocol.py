@@ -18,6 +18,8 @@ class AgentRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     requested_by: str
     issued_at: str = Field(default_factory=_now)
+    # how long the agent may run the job (app.task_timeouts); None = agent default
+    timeout_seconds: int | None = None
 
 
 class AgentResponse(BaseModel):

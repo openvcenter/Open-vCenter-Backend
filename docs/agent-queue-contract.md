@@ -52,7 +52,8 @@ Written by `app/messaging/publisher.py::publish_request`. The AMQP message
   "function": "vm_start",
   "params": { "vm_id": "b747349c-c90b-4126-bc2d-ef8ceb3444c4" },
   "requested_by": "operator@ovc.local",
-  "issued_at": "2026-08-29T15:04:05.123456+00:00"
+  "issued_at": "2026-08-29T15:04:05.123456+00:00",
+  "timeout_seconds": null
 }
 ```
 
@@ -63,6 +64,7 @@ Written by `app/messaging/publisher.py::publish_request`. The AMQP message
 | `params`       | `{ "vm_id": "<hyper-v guid>" }` for every request that targets an existing VM. The one exception is `vm_create` (no VM exists yet) - see its row below. |
 | `requested_by` | the caller's email (display/audit only)                                                                                                                 |
 | `issued_at`    | when the backend enqueued it                                                                                                                            |
+| `timeout_seconds` | how long the agent may run the job (worker kill; the handler gets slightly less). `null` = the agent's own default for that function. See "Task timeouts" below. |
 
 ### Functions the backend posts
 
@@ -188,7 +190,7 @@ Every key is optional; only the ones present are applied. The backend passes
 #### Management functions - **stubs** (agent not implemented yet)
 
 The backend queues the task and publishes the request; with no agent handler the
-worker's timeout sweeper flips the task to `timeout` after `task_timeout_seconds`.
+worker's timeout sweeper flips the task to `timeout` after its deadline.
 None set an optimistic state. `params` keys are the agent's to define.
 
 | `function`                             | REST action                                            | `params` keys (suggested)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -227,7 +229,7 @@ process swaps the binary and restarts. The _new_ agent, on startup, publishes th
 single terminal response for the original `id` - `succeeded` with
 `result: { version, old_version, upgraded: true }`, or `failed` on rollback. The
 worker stamps `Host.agent_version` from a successful `result.version` immediately.
-Task timeout is 1800s (`app/task_timeouts.py`) to cover the whole window; if the
+Its backend deadline is 1800s (`app/task_timeouts.py`) to cover the whole window; if the
 new agent never confirms, the sweeper marks the task `timeout` and the next
 `agent_status` reconciles the version.
 
@@ -375,15 +377,31 @@ terminal response. The matching `AgentRequest` it published is kept in
    }
    ```
 
-If no terminal response arrives within `OVC_TASK_TIMEOUT_SECONDS` (default 300) the
-worker marks the task `timeout` on its own (`app/worker/main.py::_timeout_sweeper`).
-Some kinds get a longer grace (`_LONG_TASK_TIMEOUTS`): `vm_shutdown` 900s;
-`vm_move` / `vm_rename` / `vm_export_template` / `vm_batch_*` / `vm_clone` /
-`vm_edit` 2100s - each kept above the agent's own hard kill so the backend never
-times a task out while the agent is still working.
+**Task timeouts** (`app/task_timeouts.py`). Each task gets two deadlines when it
+is queued. The **agent** one goes out as `AgentRequest.timeout_seconds`: a base
+for kinds that run for minutes (`vm_shutdown` 600s; `vm_create` / `vm_edit` /
+`vm_clone` / `vm_move` / `vm_rename` / `vm_export_template` / `vm_batch_*` 1800s)
+plus a disk budget:
+
+- `vm_create` (`disks`) / `vm_edit` (`add_disk`, `edit_disk`), from the params:
+  Fixed `size_gb × 10s` (min 120s, zero-fill), Dynamic 60s; `edit_disk` is counted
+  as Fixed.
+- copying operations, from the inventoried disks (`used_bytes`, else `size_bytes`;
+  passthrough disks skipped) at 10s/GB: `vm_move` / `vm_rename` copy the VM's used
+  bytes once (`Move-VMStorage`); `vm_export_template` copies them and reads each
+  Fixed disk again (conversion to Dynamic); `vm_clone` from a VM copies them twice
+  (export + `Import-VM -Copy`), from a template copies `disk_size_bytes` and, unless
+  `expand_disks` is `false`, zero-fills `size_bytes` (conversion to Fixed).
+
+Other kinds send `null`. The **backend** one is the agent's plus
+300s (it counts from `created_at`, so it also covers the wait in the agent's queue),
+never below `OVC_TASK_TIMEOUT_SECONDS` (default 300), and is stored in
+`Task.timeout_seconds`. If no terminal response arrives by then the worker marks
+the task `timeout` on its own (`app/worker/main.py::_timeout_sweeper`).
+`host_update_agent` has a backend-only deadline of 1800s.
 
 **VM lock.** When the backend queues a mutating VM task it takes a Valkey lock
-(`vm:lock:<vm_id>`, TTL = task timeout + 60s); a second operation on that VM is
+(`vm:lock:<vm_id>`, TTL = the task's backend deadline + 60s); a second operation on that VM is
 rejected with HTTP 409 `VM_LOCKED` until the task reaches a terminal state
 (`apply_response` / the timeout sweeper release it; the TTL is the crash backstop).
 The agent is not involved - it never sees the lock. Admin-only recovery endpoints:
