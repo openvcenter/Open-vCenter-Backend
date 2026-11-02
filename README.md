@@ -61,23 +61,25 @@ ovc-frontend ──REST /api/*──▶ ovc-backend ──RabbitMQ──▶ ovc-
 FastAPI · Pydantic v2 · SQLAlchemy 2.0 (async) · asyncpg · Alembic · aio-pika ·
 redis-py · Python 3.11+.
 
-## Infra first
+## Dependencies
 
-Postgres, Valkey, RabbitMQ (and Keycloak) live in **`../infra-containers`**, not
-here. Start them once:
+The backend needs these services running before it starts:
 
-```sh
-cd ../infra-containers && ./start-containers.sh
-```
+| Service              | Version | Used for                                                                   |
+| -------------------- | ------- | -------------------------------------------------------------------------- |
+| PostgreSQL           | 17      | system of record (inventory, tasks, roles and permissions, audit log)      |
+| RabbitMQ             | 4       | the only channel to the agents (per-host request / response queues)        |
+| Valkey (or Redis 7+) | 8.0     | agent liveness, per-VM locks, cached inventory reads                       |
+| OIDC provider        | any     | token verification when `OVC_AUTH_MODE=oidc` (Keycloak, Entra ID, Okta...) |
 
-That publishes on localhost: postgres `:5432` (`ovc` / `ovc123` / db `ovc`),
-rabbitmq `:5672` (+ UI `:15672`), valkey `:6379`, pgAdmin `:8088`
-(`admin@ovc.dev` / `admin`), keycloak `:8080`.
+See [Dependencies](https://openvcenter.com/docs/dependencies/) for what each
+one holds and a minimal Docker Compose file that starts them. The defaults in
+`.env.example` expect them on localhost.
 
 ## Run with Docker
 
 `ovc-backend/docker-compose.yml` runs only the **API** and **worker**; they reach the
-infra via `host.docker.internal`. The API container runs migrations on start. The
+dependencies via `host.docker.internal`. The API container runs migrations on start. The
 database starts **empty** - register hosts with `POST /api/hosts`.
 
 ```sh
@@ -94,13 +96,13 @@ docker compose --profile demo up -d
 
 ## Run locally (without Docker)
 
-Requires Python 3.11+ and the infra from `../infra-containers` up.
+Requires Python 3.11+ and the [dependencies](#dependencies) up.
 
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
 pip3 install -e ".[dev]"          # or: uv sync
 
-cp .env.example .env             # defaults already match ../infra-containers
+cp .env.example .env             # defaults expect the dependencies on localhost
 
 alembic upgrade head
 
