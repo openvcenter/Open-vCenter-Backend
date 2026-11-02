@@ -171,9 +171,10 @@ async def _check_name_free(db: DbSession, name: str, role_id: str | None = None)
     name = name.strip()
     if not name:
         raise ApiError("VALIDATION_ERROR", "The role name cannot be empty")
-    clash = await db.scalar(
-        select(Role.id).where(func.lower(Role.name) == name.lower(), Role.id != (role_id or ""))
-    )
+    stmt = select(Role.id).where(func.lower(Role.name) == name.lower())
+    if role_id is not None:  # renaming: the role itself doesn't clash
+        stmt = stmt.where(Role.id != role_id)
+    clash = await db.scalar(stmt)
     if clash:
         raise ApiError(
             "ROLE_EXISTS", f"A role named '{name}' already exists", status.HTTP_409_CONFLICT
