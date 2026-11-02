@@ -61,18 +61,18 @@ class Settings(BaseSettings):
     oidc_issuer: str = ""
     oidc_audience: str = "ovc-frontend"
     oidc_jwks_url: str = ""
-    # OIDC client id - substituted for "${client_id}" in oidc_roles_claim
+    # OIDC client id - substituted for "${client_id}" in oidc_groups_claim
     oidc_client_id: str = "ovc-frontend"
-    # dot-path to the roles array in the token ("${client_id}" is substituted):
+    # Where the user's groups are in the token - the names permissions are
+    # granted to. A dot-path ("${client_id}" is substituted) to an array or a
+    # space-separated string:
     #   Keycloak client roles (default): resource_access.${client_id}.roles
     #   Keycloak realm roles           : realm_access.roles
-    #   Auth0 / Okta / flat claim      : roles  (or "https://ovc.example/roles")
-    oidc_roles_claim: str = "resource_access.${client_id}.roles"
-    # dot-path to the groups array in the token (same syntax as oidc_roles_claim).
-    # Roles and groups are the principals permissions are granted to.
-    oidc_groups_claim: str = "groups"
-    # this role is a superuser: every privilege everywhere, no permission needed
-    admin_role: str = "ADMINISTRATOR"
+    #   Keycloak groups (Group Membership mapper), Entra ID, Okta: groups
+    oidc_groups_claim: str = "resource_access.${client_id}.roles"
+    # members of this group are superusers: every privilege everywhere, no
+    # permission needed
+    admin_group: str = "ADMINISTRATOR"
     # seconds a fetched JWKS document is cached before re-download
     oidc_jwks_ttl_seconds: int = 3600
     session_secret: str = "change-me-before-prod"

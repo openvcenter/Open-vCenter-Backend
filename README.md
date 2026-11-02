@@ -127,11 +127,10 @@ Docker Compose sets them itself; `.env.example` is the template for local runs.
 | `OVC_API_PREFIX`                                             | `/api`                                               | mount point for all routes                                                                                |
 | `OVC_CORS_ORIGINS`                                           | `["http://localhost:3000"]`                          | JSON list of allowed origins                                                                              |
 | `OVC_AUTH_MODE`                                              | `stub`                                               | `stub` = trust every request as `OVC_STUB_USER_EMAIL`; `oidc` = verify OIDC JWTs                          |
-| `OVC_STUB_USER_EMAIL`                                        | `operator@ovc.local`                                 | the dev principal (carries `OVC_ADMIN_ROLE`). Set the same `OVC_AUTH_MODE=stub` on the frontend too. |
+| `OVC_STUB_USER_EMAIL`                                        | `operator@ovc.local`                                 | the dev user (member of `OVC_ADMIN_GROUP`). Set the same `OVC_AUTH_MODE=stub` on the frontend too. |
 | `OVC_OIDC_ISSUER` / `_AUDIENCE` / `_JWKS_URL` / `_CLIENT_ID` | -                                                    | required when `OVC_AUTH_MODE=oidc`                                                                        |
-| `OVC_OIDC_ROLES_CLAIM`                                       | `resource_access.${client_id}.roles`                 | dot-path to the roles array in the token (`${client_id}` substituted); e.g. `realm_access.roles`, `roles` |
-| `OVC_OIDC_GROUPS_CLAIM` | `groups` | dot-path to the groups array in the token (same syntax). Roles and groups are what permissions are granted to |
-| `OVC_ADMIN_ROLE`                                             | `ADMINISTRATOR`                                      | superuser role: every privilege everywhere, no permission needed|
+| `OVC_OIDC_GROUPS_CLAIM` | `resource_access.${client_id}.roles` | where the user's groups are in the token (dot-path, `${client_id}` substituted) - the names permissions are granted to. Keycloak client roles (default), `realm_access.roles`, or `groups` (Keycloak Group Membership mapper, Entra ID, Okta) |
+| `OVC_ADMIN_GROUP` | `ADMINISTRATOR` | members of this group are superusers: every privilege everywhere, no permission needed |
 | `OVC_AGENT_OFFLINE_AFTER_SECONDS`                            | `120`                                                | host is "offline" if `agent_status` is older than this                                                    |
 | `OVC_TASK_TIMEOUT_SECONDS`                                   | `300`                                                | worker marks a task `timeout` after this                                                                  |
 | `OVC_AUDIT_RETENTION_DAYS`                                   | `365`                                                | days an audit event is kept before the worker prunes it; `0` = keep forever                               |
@@ -172,9 +171,9 @@ Access control (see LLM.md "Access control"):
 - `GET /rbac/catalog` - privileges + the privilege each VM action needs
 - `GET /roles` · `POST /roles` · `PATCH /roles/{id}` · `POST /roles/{id}/clone` · `DELETE /roles/{id}` (`rbac.manage`; built-in roles are read-only)
 - `GET /permissions?scopeType&scopeId` (direct + inherited) · `POST /permissions` · `PATCH /permissions/{id}` · `DELETE /permissions/{id}` (`rbac.manage` on the object)
-- `GET /principals?q` - role / group names to suggest
+- `GET /rbac/groups?q` - group names to suggest
 - `GET /me/privileges?ids=vm:<id>,host:<id>,global` - the caller's privileges per object
-- `GET /rbac/effective?principal=group:<name>&object=vm:<id>` - why a role / group may do what
+- `GET /rbac/effective?group=<name>&object=vm:<id>` - why a group may do what
 - `GET /vms/{id}/console` (`vm.console`) · `GET /hosts/{id}/console` (`host.console`) - where the console connects
 
 Responses are **camelCase** JSON. Errors: `{ "error": { "code", "message", "details"? } }`.

@@ -1,9 +1,9 @@
 """Authorization: who may see and do what on which inventory object.
 
-A permission grants a role (a set of privileges) to a principal on an object;
-with `propagate` it also applies to everything below that object. Principals
-are the roles and groups the identity provider reports for the signed-in user
-(`Principals`) - permissions are never granted to individual users.
+A permission grants a role (a set of privileges) to a group on an object; with
+`propagate` it also applies to everything below that object. The groups are
+the ones the identity provider reports for the signed-in user (`Principals`) -
+permissions are never granted to individual users.
 
 The inventory is a tree with one twist: a VM has two parents.
 
@@ -24,7 +24,7 @@ Resolution, for one object:
   above a granted object becomes visible - a folder grant shows that folder and
   its VMs, not the host or cluster around it.
 
-The configured admin role (`OVC_ADMIN_ROLE`) is a superuser: every privilege
+Members of the admin group (`OVC_ADMIN_GROUP`) are superusers: every privilege
 everywhere, with no permission row (break-glass; cannot be locked out).
 """
 
@@ -58,24 +58,20 @@ LevelResult = frozenset[str] | _Blocked | None
 
 @dataclass(frozen=True)
 class Principals:
-    """Identity-provider-neutral principal set of the caller."""
+    """The caller's groups, whatever identity provider reported them (OIDC
+    claim, later LDAP). Permissions are granted to these."""
 
-    roles: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
-
-    def keys(self) -> set[tuple[str, str]]:
-        return {("role", r) for r in self.roles} | {("group", g) for g in self.groups}
 
     @property
     def superuser(self) -> bool:
-        return get_settings().admin_role in self.roles
+        return get_settings().admin_group in self.groups
 
 
 @dataclass(frozen=True)
 class PermRow:
     id: str
-    principal_type: str
-    principal_id: str
+    group_id: str
     role_id: str
     role_name: str
     scope_type: str
@@ -391,29 +387,15 @@ async def role_privileges(db: AsyncSession, role_ids: Iterable[str]) -> dict[str
     return result
 
 
-async def load_rows(
-    db: AsyncSession, principals: Principals, *, scope: Ref | None = None
-) -> list[PermRow]:
-    """Permission rows of `principals`, optionally on one object. With no
-    principals and a `scope`: every principal's rows on that object."""
-    stmt = select(Permission, Role.name).join(Role, Role.id == Permission.role_id)
-    keys = principals.keys()
-    if keys:
-        stmt = stmt.where(
-            or_(
-                *(
-                    and_(Permission.principal_type == t, Permission.principal_id == i)
-                    for t, i in sorted(keys)
-                )
-            )
-        )
-    elif scope is None:
+async def load_rows(db: AsyncSession, principals: Principals) -> list[PermRow]:
+    """Every permission row granted to the caller's groups."""
+    if not principals.groups:
         return []
-    if scope is not None:
-        stmt = stmt.where(
-            Permission.scope_type == scope[0],
-            Permission.scope_id.is_(None) if scope[1] is None else Permission.scope_id == scope[1],
-        )
+    stmt = (
+        select(Permission, Role.name)
+        .join(Role, Role.id == Permission.role_id)
+        .where(Permission.group_id.in_(principals.groups))
+    )
     perms = (await db.execute(stmt)).all()
     privs = await role_privileges(db, {p.role_id for p, _ in perms})
     return [to_row(p, name, privs[p.role_id]) for p, name in perms]
@@ -422,8 +404,7 @@ async def load_rows(
 def to_row(p: Permission, role_name: str, privileges: frozenset[str]) -> PermRow:
     return PermRow(
         id=p.id,
-        principal_type=p.principal_type,
-        principal_id=p.principal_id,
+        group_id=p.group_id,
         role_id=p.role_id,
         role_name=role_name,
         scope_type=p.scope_type,

@@ -57,7 +57,7 @@ def perm(
     scope: tuple[str, str | None],
     privileges: frozenset[str] = POWER,
     *,
-    principal: tuple[str, str] = ("group", "db-team"),
+    group: str = "db-team",
     propagate: bool = True,
     role_id: str | None = None,
 ) -> PermRow:
@@ -67,8 +67,7 @@ def perm(
         privileges = ALL_PRIVILEGES
     return PermRow(
         id=new_id(),
-        principal_type=principal[0],
-        principal_id=principal[1],
+        group_id=group,
         role_id=role_id or new_id(),
         role_name="test",
         scope_type=scope[0],
@@ -83,7 +82,7 @@ def no_access(scope, **kw) -> PermRow:
 
 
 def access(*rows: PermRow, groups=("db-team", "ops")) -> Access:
-    return Access(Principals(roles=("user",), groups=groups), rows, topology())
+    return Access(Principals(groups=groups), rows, topology())
 
 
 def vm_privs(a: Access, vm_id: str):
@@ -204,36 +203,35 @@ def test_read_only_is_visible_without_privileges() -> None:
     assert not a.can("vm.power", ("host", "H1"))
 
 
-# ---- principals -----------------------------------------------------------------
+# ---- groups ---------------------------------------------------------------------
 
 
 def test_groups_at_the_same_level_combine() -> None:
     a = access(
-        perm(("host", "H1"), POWER, principal=("group", "db-team")),
-        perm(("host", "H1"), CONFIG, principal=("group", "ops")),
+        perm(("host", "H1"), POWER, group="db-team"),
+        perm(("host", "H1"), CONFIG, group="ops"),
     )
     assert a.privileges(("host", "H1")) == POWER | CONFIG
 
 
 def test_no_access_at_a_level_beats_other_groups_there() -> None:
     a = access(
-        perm(("host", "H1"), POWER, principal=("group", "db-team")),
-        no_access(("host", "H1"), principal=("group", "ops")),
+        perm(("host", "H1"), POWER, group="db-team"),
+        no_access(("host", "H1"), group="ops"),
     )
     assert a.privileges(("host", "H1")) is None
 
 
 def test_superuser_role_gets_everything() -> None:
-    a = Access(Principals(roles=("ADMINISTRATOR",)), (), Topology())
+    a = Access(Principals(groups=("ADMINISTRATOR",)), (), Topology())
     assert a.all
     assert a.privileges(("host", "anything")) == ALL_PRIVILEGES
     assert vm_privs(a, "vm-c1") == ALL_PRIVILEGES
 
 
-def test_principal_keys_are_role_and_group_names() -> None:
-    p = Principals(roles=("r1",), groups=("g1", "g2"))
-    assert p.keys() == {("role", "r1"), ("group", "g1"), ("group", "g2")}
-    assert not p.superuser
+def test_only_the_admin_group_is_superuser() -> None:
+    assert Principals(groups=("ops", "ADMINISTRATOR")).superuser
+    assert not Principals(groups=("ops",)).superuser
 
 
 # ---- SQL twin ---------------------------------------------------------------------

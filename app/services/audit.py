@@ -77,7 +77,7 @@ def _ref(target: Target) -> _TargetRef:
         return _TargetRef(
             "permission",
             target.id,
-            f"{target.principal_type}:{target.principal_id}",
+            target.group_id,
             target.scope_id if target.scope_type == "host" else None,
             target.scope_id if target.scope_type == "cluster" else None,
         )

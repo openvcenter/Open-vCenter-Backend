@@ -7,7 +7,6 @@ from pydantic import Field
 
 from .common import CamelModel
 
-PrincipalType = Literal["role", "group"]
 ScopeType = Literal["global", "cluster", "host", "folder", "vm"]
 
 
@@ -50,8 +49,8 @@ class RoleClone(CamelModel):
 
 class PermissionOut(CamelModel):
     id: str
-    principal_type: PrincipalType
-    principal_id: str
+    # the group as the identity provider names it
+    group: str
     role_id: str
     role_name: str
     scope_type: ScopeType
@@ -69,8 +68,7 @@ class PermissionListOut(CamelModel):
 
 
 class PermissionCreate(CamelModel):
-    principal_type: PrincipalType
-    principal_id: str = Field(min_length=1, max_length=255)
+    group: str = Field(min_length=1, max_length=255)
     role_id: str
     scope_type: ScopeType
     scope_id: str | None = None
@@ -80,11 +78,6 @@ class PermissionCreate(CamelModel):
 class PermissionUpdate(CamelModel):
     role_id: str | None = None
     propagate: bool | None = None
-
-
-class PrincipalOut(CamelModel):
-    type: PrincipalType
-    id: str
 
 
 class MyPrivilegesOut(CamelModel):
@@ -109,7 +102,7 @@ class EffectivePathOut(CamelModel):
 
 
 class EffectiveOut(CamelModel):
-    principal: PrincipalOut
+    group: str
     superuser: bool
     visible: bool
     privileges: list[str]

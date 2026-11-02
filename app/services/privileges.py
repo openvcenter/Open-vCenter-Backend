@@ -46,6 +46,5 @@ BUILTIN_ROLE_PRIVILEGES: dict[str, frozenset[str]] = {
     NO_ACCESS_ROLE_ID: frozenset(),
 }
 
-PRINCIPAL_TYPES = ("role", "group")
 # Coarsest first. A VM has two parents (its folder and its host), see rbac.py.
 SCOPE_TYPES = ("global", "cluster", "host", "folder", "vm")

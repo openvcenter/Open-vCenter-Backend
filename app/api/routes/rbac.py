@@ -16,7 +16,6 @@ from ...schemas import (
     PermissionListOut,
     PermissionOut,
     PermissionUpdate,
-    PrincipalOut,
     PrivilegeOut,
     RbacCatalogOut,
     RoleClone,
@@ -280,8 +279,7 @@ async def remove_role(role_id: str, db: DbSession, scope: Scope, user: CurrentUs
 def _perm_out(p: Permission | PermRow, role_name: str, names: dict[Ref, str]) -> PermissionOut:
     return PermissionOut(
         id=p.id,
-        principal_type=p.principal_type,
-        principal_id=p.principal_id,
+        group=p.group_id,
         role_id=p.role_id,
         role_name=role_name,
         scope_type=p.scope_type,
@@ -316,7 +314,7 @@ async def _permissions_on(db: DbSession, refs: list[Ref]) -> list[tuple[Permissi
             .where(
                 Permission.scope_id.is_(None) if ref[1] is None else Permission.scope_id == ref[1]
             )
-            .order_by(Permission.principal_type, Permission.principal_id)
+            .order_by(Permission.group_id)
         )
         rows.extend((await db.execute(stmt)).tuples().all())
     return rows
@@ -375,14 +373,13 @@ async def add_permission(
     obj = await _load_object(db, ref)
     _require_on(scope, "rbac.manage", ref, obj)
     role = await _grantable_role(db, scope, body.role_id, ref, obj)
-    principal_id = body.principal_id.strip()
-    if not principal_id:
-        raise ApiError("VALIDATION_ERROR", "principalId cannot be empty")
+    group = body.group.strip()
+    if not group:
+        raise ApiError("VALIDATION_ERROR", "group cannot be empty")
 
     existing = await db.scalar(
         select(Permission.id).where(
-            Permission.principal_type == body.principal_type,
-            Permission.principal_id == principal_id,
+            Permission.group_id == group,
             Permission.scope_type == ref[0],
             Permission.scope_id.is_(None) if ref[1] is None else Permission.scope_id == ref[1],
         )
@@ -390,13 +387,12 @@ async def add_permission(
     if existing:
         raise ApiError(
             "PERMISSION_EXISTS",
-            f"{body.principal_type} '{principal_id}' already has a permission here - edit it",
+            f"Group '{group}' already has a permission here - edit it",
             status.HTTP_409_CONFLICT,
             details={"permissionId": existing},
         )
     perm = Permission(
-        principal_type=body.principal_type,
-        principal_id=principal_id,
+        group_id=group,
         role_id=role.id,
         scope_type=ref[0],
         scope_id=ref[1],
@@ -470,30 +466,20 @@ async def remove_permission(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/principals", response_model=list[PrincipalOut])
-async def list_principals(
+@router.get("/rbac/groups", response_model=list[str])
+async def list_groups(
     db: DbSession,
     scope: Scope,
     q: str | None = Query(default=None),
-) -> list[PrincipalOut]:
-    """Role and group names to suggest when adding a permission: the caller's
-    own plus every principal already used in a permission."""
+) -> list[str]:
+    """Group names to suggest when adding a permission: the caller's own plus
+    every group already used in a permission."""
     if not scope.holds_anywhere("rbac.manage"):
         raise forbidden("Missing privilege 'rbac.manage'")
-    known = {("role", r) for r in scope.principals.roles} | {
-        ("group", g) for g in scope.principals.groups
-    }
-    known |= set(
-        (await db.execute(select(Permission.principal_type, Permission.principal_id).distinct()))
-        .tuples()
-        .all()
-    )
+    known = set(scope.principals.groups)
+    known |= set((await db.execute(select(Permission.group_id).distinct())).scalars())
     needle = (q or "").strip().lower()
-    return [
-        PrincipalOut(type=t, id=i)
-        for t, i in sorted(known, key=lambda k: (k[1].lower(), k[0]))
-        if needle in i.lower()
-    ][:50]
+    return sorted((g for g in known if needle in g.lower()), key=str.lower)[:50]
 
 
 # ---- privilege queries -------------------------------------------------------
@@ -537,19 +523,16 @@ async def my_privileges(
 async def effective_permissions(
     db: DbSession,
     scope: Scope,
-    principal: str = Query(description="`role:<name>` or `group:<name>`"),
+    group: str = Query(min_length=1, description="The group name"),
     object_: str = Query(alias="object", description="`global` or `<scopeType>:<id>`"),
 ) -> EffectiveOut:
-    """What one role or group may do on an object, and which permission grants
-    it - level by level along each inheritance path. Needs `rbac.manage` there."""
-    ptype, _, pid = principal.partition(":")
-    if ptype not in ("role", "group") or not pid:
-        raise ApiError("VALIDATION_ERROR", "principal must be role:<name> or group:<name>")
+    """What one group may do on an object, and which permission grants it -
+    level by level along each inheritance path. Needs `rbac.manage` there."""
     ref = _parse_ref(object_)
     obj = await _load_object(db, ref)
     _require_on(scope, "rbac.manage", ref, obj)
 
-    principals = Principals(roles=(pid,)) if ptype == "role" else Principals(groups=(pid,))
+    principals = Principals(groups=(group,))
     rows = [] if principals.superuser else await load_rows(db, principals)
     access = Access(principals, rows, await load_topology(db))
 
@@ -584,7 +567,7 @@ async def effective_permissions(
             )
         )
     return EffectiveOut(
-        principal=PrincipalOut(type=ptype, id=pid),
+        group=group,
         superuser=access.superuser,
         visible=privs is not None,
         privileges=_ordered(privs or ()),

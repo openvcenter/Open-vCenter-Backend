@@ -13,8 +13,8 @@ x-app-env: &app-env
   OVC_CORS_ORIGINS: '["http://localhost:3000"]'
   # Auth: "stub" trusts every request. To verify OIDC JWTs instead, set
   # OVC_AUTH_MODE=oidc and the vars below (defaults target the "ovc" realm from
-  # ../infra-containers/keycloak/ovc-realm.json). Roles are read at
-  # OVC_OIDC_ROLES_CLAIM; ADMINISTRATOR is a superuser.
+  # ../infra-containers/keycloak/ovc-realm.json). The user's groups are read at
+  # OVC_OIDC_GROUPS_CLAIM; members of OVC_ADMIN_GROUP (ADMINISTRATOR) are superusers.
   OVC_AUTH_MODE: stub
   # ISSUER must equal the token's `iss` (the URL the frontend/browser used),
   # while JWKS_URL is how *this* container reaches the provider - they differ here.
@@ -22,9 +22,10 @@ x-app-env: &app-env
   OVC_OIDC_JWKS_URL: http://host.docker.internal:8080/realms/ovc/protocol/openid-connect/certs
   OVC_OIDC_AUDIENCE: ovc-frontend
   OVC_OIDC_CLIENT_ID: ovc-frontend
-  # default roles claim is resource_access.<client_id>.roles; to override in
-  # compose, escape the literal as  $${client_id}  (compose eats a single $)
-  # OVC_OIDC_ROLES_CLAIM: realm_access.roles
+  # default groups claim is resource_access.<client_id>.roles (Keycloak client
+  # roles); to override in compose, escape the literal as  $${client_id}
+  # (compose eats a single $)
+  # OVC_OIDC_GROUPS_CLAIM: groups
 
 x-app-base: &app-base
   build: .

@@ -25,7 +25,7 @@ async def get_or_create_user(
     *,
     email: str,
     display_name: str | None = None,
-    roles: list[str] | None = None,
+    groups: list[str] | None = None,
 ) -> User:
     user = await _lookup(db, email)
 
@@ -34,7 +34,7 @@ async def get_or_create_user(
             id=new_id(),
             email=email,
             display_name=display_name or email.split("@")[0],
-            roles=",".join(roles) if roles else None,
+            groups=groups or None,
         )
         try:
             async with db.begin_nested():  # SAVEPOINT - survives a lost create race
@@ -48,14 +48,14 @@ async def get_or_create_user(
     if user is None:  # pragma: no cover - the row must exist by now
         raise RuntimeError(f"could not get or create user {email}")
 
-    if roles is not None:
-        user.roles = ",".join(roles)
+    if groups is not None:
+        user.groups = groups
 
     return user
 
 
 async def resolve_stub_user(db: AsyncSession) -> User:
-    """Dev principal: one shared admin (carries the admin role)."""
+    """Dev principal: one shared admin (member of the admin group)."""
     return await get_or_create_user(
-        db, email=_settings.stub_user_email, roles=[_settings.admin_role]
+        db, email=_settings.stub_user_email, groups=[_settings.admin_group]
     )

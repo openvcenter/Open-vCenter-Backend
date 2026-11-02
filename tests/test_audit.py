@@ -182,13 +182,13 @@ def client_as():
 
 
 async def test_audit_events_need_audit_read(client_as) -> None:
-    async with client_as(Access(Principals(roles=("user",)))) as client:
+    async with client_as(Access(Principals(groups=("user",)))) as client:
         resp = await client.get("/api/audit-events")
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "FORBIDDEN"
 
 
 async def test_audit_events_rejects_bad_ids(client_as) -> None:
-    async with client_as(Access(Principals(roles=("ADMINISTRATOR",)))) as client:
+    async with client_as(Access(Principals(groups=("ADMINISTRATOR",)))) as client:
         resp = await client.get("/api/audit-events", params={"hostId": "nope"})
     assert resp.status_code == 422

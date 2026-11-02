@@ -117,25 +117,24 @@ class Identity:
 
 
 async def get_identity(request: Request, db: DbSession) -> Identity:
-    """Signed-in user plus their principals. Each auth mode is an adapter that
-    maps its credentials to the provider-neutral `Principals`."""
+    """Signed-in user plus their groups. Each auth mode is an adapter that maps
+    its credentials to the provider-neutral `Principals`."""
     if _settings.auth_mode == "stub":
         user = await resolve_stub_user(db)
-        return Identity(user, Principals(roles=(_settings.admin_role,)))
+        return Identity(user, Principals(groups=(_settings.admin_group,)))
 
     token = _bearer_token(request)
     if not token:
         raise unauthorized()
     claims = await _verify_oidc(token)
-    roles = _claim_list(claims, _settings.oidc_roles_claim)
+    groups = _claim_list(claims, _settings.oidc_groups_claim)
     user = await get_or_create_user(
         db,
         email=claims.get("email") or claims["sub"],
         display_name=claims.get("name"),
-        roles=roles,
+        groups=groups,
     )
-    groups = _claim_list(claims, _settings.oidc_groups_claim)
-    return Identity(user, Principals(roles=tuple(roles), groups=tuple(groups)))
+    return Identity(user, Principals(groups=tuple(groups)))
 
 
 CurrentIdentity = Annotated[Identity, Depends(get_identity)]

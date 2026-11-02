@@ -7,9 +7,8 @@ class MeOut(CamelModel):
     id: str
     email: str
     display_name: str | None = None
-    roles: list[str] = []
     groups: list[str] = []
-    # carries the admin role: every privilege everywhere
+    # member of the admin group: every privilege everywhere
     superuser: bool = False
     global_privileges: list[str] = []
 

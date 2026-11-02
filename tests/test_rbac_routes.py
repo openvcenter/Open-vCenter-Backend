@@ -75,8 +75,7 @@ class FakeSession:
 def _perm(scope, privileges, role_id=None) -> PermRow:
     return PermRow(
         id=new_id(),
-        principal_type="group",
-        principal_id="helpdesk",
+        group_id="helpdesk",
         role_id=role_id or new_id(),
         role_name="test",
         scope_type=scope[0],
@@ -230,8 +229,7 @@ ADMIN_ONLY_CALLS = [
         "POST",
         "/api/permissions",
         {
-            "principalType": "group",
-            "principalId": "x",
+            "group": "x",
             "roleId": READ_ONLY_ROLE_ID,
             "scopeType": "global",
         },

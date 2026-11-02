@@ -145,13 +145,13 @@ app/
   api/
     errors.py          ApiError + handlers -> { "error": { code, message, details } }.
                        A non-UUID id in the path (stale bookmark) → 404, not 500.
-    deps.py            DbSession, CurrentIdentity (user + Principals), CurrentUser,
+    deps.py            DbSession, CurrentIdentity (user + Principals = groups), CurrentUser,
                        Scope (= rbac.Access) dependencies; the OIDC adapter
     routes/            health, auth(/me), clusters, hosts, folders, vlans, vms
                        (+ GET /vms/{id}/thumbnail -> image/jpeg, X-Captured-At), tags
                        (/tag-categories, /tags), tasks, images, agent_binaries,
                        audit (GET /audit-events), rbac (/rbac/catalog, /roles,
-                       /permissions, /principals, /me/privileges, /rbac/effective)
+                       /permissions, /rbac/groups, /me/privileges, /rbac/effective)
   worker/
     main.py            connect, subscribe every host's consumed queues, rescan for
                        new hosts every 15s, timeout sweeper every 30s, metrics
@@ -196,18 +196,20 @@ next periodic `vm_inventory`.
 ## Auth
 
 `OVC_AUTH_MODE=stub` (default): every request is the single user
-`OVC_STUB_USER_EMAIL`, carrying `OVC_ADMIN_ROLE` → superuser (same variable, same
-value on the frontend - set its `OVC_AUTH_MODE=stub` too).
+`OVC_STUB_USER_EMAIL`, a member of `OVC_ADMIN_GROUP` → superuser (same variable,
+same value on the frontend - set its `OVC_AUTH_MODE=stub` too).
 `OVC_AUTH_MODE=oidc`: `app/api/deps.py::_verify_oidc` validates the
 `Authorization: Bearer` JWT against `OVC_OIDC_JWKS_URL` (any OIDC provider; JWKS
-cached `OVC_OIDC_JWKS_TTL_SECONDS`). Roles come from the token at the dot-path
-`OVC_OIDC_ROLES_CLAIM` (default `resource_access.${client_id}.roles`, mirrors
-ovc-frontend's `OIDC_ROLES_CLAIM`), groups from `OVC_OIDC_GROUPS_CLAIM` (default
-`groups`, same syntax). Users are upserted by email.
+cached `OVC_OIDC_JWKS_TTL_SECONDS`). The user's **groups** come from the token
+at the dot-path `OVC_OIDC_GROUPS_CLAIM` - one source per provider. Default
+`resource_access.${client_id}.roles` (Keycloak client roles); `realm_access.roles`
+or `groups` (Keycloak Group Membership mapper, Entra ID, Okta) work the same.
+Mirrors ovc-frontend's `OIDC_GROUPS_CLAIM`. Users are upserted by email; their
+last groups are kept in `users.groups` (informational).
 
 Each auth mode is an adapter in `deps.get_identity` that returns the user plus a
-provider-neutral `rbac.Principals(roles, groups)`. Nothing past that point knows
-about OIDC: a future LDAP adapter fills the same structure.
+provider-neutral `rbac.Principals(groups)`. Nothing past that point knows about
+OIDC: a future LDAP adapter fills the same structure with the user's groups.
 
 ## Access control
 
@@ -219,9 +221,9 @@ Privileges (`services/privileges.py`) → roles → permissions.
 - **Role:** a named set of privileges. Built-ins (fixed ids, privileges in code,
   read-only): Administrator, Read-only (visible, no privileges), No access.
   Custom roles list theirs in `role_privileges`.
-- **Permission:** `(principal_type role|group, principal_id = the role / group
-  name, role, scope_type global|cluster|host|folder|vm, scope_id, propagate)`.
-  Granted to roles and groups only, never to individual users.
+- **Permission:** `(group_id = the group as the provider names it, role,
+  scope_type global|cluster|host|folder|vm, scope_id, propagate)`. Granted to
+  groups only, never to individual users.
 
 Resolution (`services/rbac.py`, docstring has the details):
 
@@ -235,7 +237,7 @@ Resolution (`services/rbac.py`, docstring has the details):
   not the host or cluster around them. Lists (`/hosts`, `/clusters`, …) filter
   strictly; a direct read of a host / cluster also works when the caller sees a
   VM on it (`Access.sees_host_context`), because VM dialogs need host details.
-- `OVC_ADMIN_ROLE` is a superuser: every privilege everywhere, no row
+- Members of `OVC_ADMIN_GROUP` are superusers: every privilege everywhere, no row
   (break-glass, cannot be locked out).
 
 In a route: `scope: Scope` is the caller's `Access`, built once per request
