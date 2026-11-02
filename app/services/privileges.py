@@ -14,10 +14,11 @@ PRIVILEGES: dict[str, tuple[str, str]] = {
     "vm.console": ("Virtual machine", "Open console"),
     "vm.config": ("Virtual machine", "Edit settings, rename, tags, move to folder"),
     "vm.snapshot": ("Virtual machine", "Create, restore and remove checkpoints"),
-    "vm.create": ("Virtual machine", "Create, clone or move a VM into this object"),
     "vm.delete": ("Virtual machine", "Delete or remove from inventory"),
     "vm.migrate": ("Virtual machine", "Migrate between hosts or storage"),
     "vm.media": ("Virtual machine", "Mount and eject DVD / ISO"),
+    # checked on the host / cluster / folder a VM lands in, never on a VM
+    "vm.create": ("Host", "Create VMs (new, clone, deploy) and receive moved ones"),
     "host.maintenance": ("Host", "Suspend, drain, resume, restart"),
     "host.config": ("Host", "Edit host settings and VLANs"),
     "host.manage": ("Host", "Add, remove and move hosts, manage agents"),
