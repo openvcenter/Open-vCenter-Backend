@@ -75,7 +75,9 @@ async def _admin_cluster(db: DbSession, scope: Scope, cluster_id: str) -> Cluste
         raise not_found("Cluster")
     if not scope.sees_cluster(cluster.id):
         raise forbidden()
-    scope.require("cluster.manage", ("cluster", cluster.id))
+    # renaming / deleting a cluster is global-only: a permission on the
+    # cluster covers what is inside it, not the cluster itself
+    scope.require("cluster.manage")
     return cluster
 
 

@@ -158,8 +158,8 @@ Everything under `OVC_API_PREFIX` (default `/api`). See
 
 Organization (synchronous, DB only - no agent):
 
-- `POST /clusters` `{name}` · `PATCH /clusters/{id}` `{name}` · `DELETE /clusters/{id}` (must be empty - no member hosts)
-- `POST /hosts` `{name, clusterId?}` · `PATCH /hosts/{id}` any subset of `{name, fqdn, clusterId}` (`clusterId: null` = standalone; `fqdn` normally left to the agent) · `DELETE /hosts/{id}` (cascades VMs/folders/templates/ISOs)
+- `POST /clusters` `{name}` · `PATCH /clusters/{id}` `{name}` · `DELETE /clusters/{id}` (must be empty - no member hosts; `cluster.manage` globally)
+- `POST /hosts` `{name, clusterId?}` · `PATCH /hosts/{id}` any subset of `{name, fqdn, clusterId}` (`clusterId: null` = standalone; `fqdn` normally left to the agent) · `DELETE /hosts/{id}` (cascades VMs/folders/templates/ISOs). Global privileges only (`host.manage`; `host.config` for name / fqdn)
 - `POST /folders` `{name, clusterId? | hostId?}` · `PATCH /folders/{id}` `{name}` · `DELETE /folders/{id}`
 - `PATCH /vms/{id}` `{folderId}` - move a VM into a folder or out (`null`)
 - `POST /tag-categories` `{name}` · `PATCH /tag-categories/{id}` `{name}` · `DELETE /tag-categories/{id}` (also deletes its tags) - `tag.manage`

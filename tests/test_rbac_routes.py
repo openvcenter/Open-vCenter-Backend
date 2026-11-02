@@ -250,3 +250,27 @@ def test_claim_list_reads_dot_paths(monkeypatch) -> None:
     assert deps._claim_list(claims, "realm_access.roles") == ["a", "b"]
     assert deps._claim_list(claims, "groups") == ["g1", "g2"]
     assert deps._claim_list(claims, "missing.path") == []
+
+
+# A permission on a host / cluster covers what is inside it, never the object
+# itself: creating, renaming, moving and removing hosts / clusters is global-only.
+SELF_MANAGEMENT_CALLS = [
+    ("POST", "/api/hosts", {"name": "h2", "clusterId": "c-1"}),
+    ("PATCH", "/api/hosts/h-1", {"name": "renamed"}),
+    ("PATCH", "/api/hosts/h-1", {"clusterId": None}),
+    ("DELETE", "/api/hosts/h-1", None),
+    ("GET", "/api/hosts/h-1/agent-config", None),
+    ("PATCH", "/api/clusters/c-1", {"name": "renamed"}),
+    ("DELETE", "/api/clusters/c-1", None),
+]
+
+
+@pytest.mark.parametrize(("method", "url", "body"), SELF_MANAGEMENT_CALLS)
+async def test_cluster_admin_cannot_manage_the_cluster_or_its_hosts(
+    client_as, method, url, body
+) -> None:
+    every = {"host.manage", "host.config", "cluster.manage", "folder.manage", "vm.create"}
+    access = _access(_perm(("cluster", "c-1"), every))
+    async with client_as(access) as client:
+        resp = await client.request(method, url, json=body)
+    assert resp.status_code == 403, resp.text

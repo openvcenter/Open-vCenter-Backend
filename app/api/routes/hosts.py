@@ -44,7 +44,6 @@ from ...services.hosts import (
     render_agent_config,
 )
 from ...services.organization import delete_host, move_host
-from ...services.rbac import GLOBAL
 from ...services.serializers import (
     agent_connected,
     host_detail_out,
@@ -90,7 +89,9 @@ async def list_hosts(
 async def add_host(
     body: HostCreate, db: DbSession, scope: Scope, user: CurrentUser
 ) -> HostDetailOut:
-    scope.require("host.manage", ("cluster", body.cluster_id) if body.cluster_id else GLOBAL)
+    # adding, renaming, moving and removing hosts is global-only: a permission
+    # on a host / cluster covers what is inside it, not the object itself
+    scope.require("host.manage")
     host = await create_host(
         db,
         name=body.name,
@@ -144,11 +145,7 @@ async def update_host(
     fields = body.model_fields_set
 
     if "cluster_id" in fields and body.cluster_id != host.cluster_id:
-        # leaving one place and arriving at another, both need host.manage
-        scope.require("host.manage", ("host", host.id))
-        scope.require(
-            "host.manage", ("cluster", body.cluster_id) if body.cluster_id else GLOBAL
-        )
+        scope.require("host.manage")  # global only
         before = await _cluster_ref(db, host.cluster_id)
         host = await move_host(db, host, body.cluster_id)
         after = await _cluster_ref(db, host.cluster_id)
@@ -157,7 +154,7 @@ async def update_host(
 
     before = {"name": host.name, "fqdn": host.fqdn}
     if {"name", "fqdn"} & fields:
-        scope.require("host.config", ("host", host.id))
+        scope.require("host.config")  # global only
     if "name" in fields and body.name is not None:
         host.name = body.name.strip()
     if "fqdn" in fields and body.fqdn is not None:
@@ -174,7 +171,8 @@ async def update_host(
 async def remove_host(
     host_id: str, db: DbSession, scope: Scope, user: CurrentUser
 ) -> None:
-    host = await _get_visible_host(db, scope, host_id, "host.manage")
+    host = await _get_visible_host(db, scope, host_id)
+    scope.require("host.manage")  # global only
     vm_count = (await _vm_counts(db)).get(host.id, 0)
     await record(db, user, "host.delete", host, details={"vmCount": vm_count})
     # the host's tasks go with it (FK cascade) - close their audit events now
@@ -194,8 +192,10 @@ async def get_host_agent_config(
     host_id: str, db: DbSession, scope: Scope
 ) -> HostAgentConfigOut:
     """The agent `config.ini` for onboarding this host (id + RabbitMQ URL with
-    per-host credentials). Needs `host.manage` - it exposes RabbitMQ credentials."""
-    host = await _get_visible_host(db, scope, host_id, "host.manage")
+    per-host credentials). Needs `host.manage` globally (onboarding is part of
+    adding a host) - it exposes RabbitMQ credentials."""
+    host = await _get_visible_host(db, scope, host_id)
+    scope.require("host.manage")
     # (re)assert the RabbitMQ user + permissions every time this is opened - cheap,
     # idempotent, and self-heals a host whose agent still can't connect.
     await provision_host_agent_user(db, host)
@@ -212,9 +212,11 @@ async def get_host_agent_install_url(
 ) -> HostAgentInstallOut:
     """Mint a tokenized `agent-install.ps1` URL for this host plus an elevated-
     PowerShell one-liner that fetches and runs it - the "copy install command"
-    button on the Setup Agent tab. Needs `host.manage`; the URL's HMAC token then
-    stands in for a login until it expires (`OVC_AGENT_INSTALL_URL_TTL_SECONDS`)."""
-    host = await _get_visible_host(db, scope, host_id, "host.manage")
+    button on the Setup Agent tab. Needs `host.manage` globally; the URL's HMAC
+    token then stands in for a login until it expires
+    (`OVC_AGENT_INSTALL_URL_TTL_SECONDS`)."""
+    host = await _get_visible_host(db, scope, host_id)
+    scope.require("host.manage")
     await provision_host_agent_user(db, host)
     url, command, expires_at = await build_agent_install_url(db, host)
     return HostAgentInstallOut(
