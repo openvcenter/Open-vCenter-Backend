@@ -192,7 +192,7 @@ def normalize_vm(item: dict) -> dict:
 
     # memory: flat byte columns. Agent sends memoryMb (int, MiB) + min/max in
     # bytes; a canonical {assignedBytes, minBytes, maxBytes, dynamic} object also
-    # passes through (idempotent re-normalize / fake agent).
+    # passes through (idempotent re-normalize).
     mem_obj = item.get("memory") if isinstance(item.get("memory"), dict) else {}
     memory_bytes = _first(item, "memoryBytes") or mem_obj.get("assignedBytes")
     if memory_bytes is None:

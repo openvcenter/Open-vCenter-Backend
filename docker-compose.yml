@@ -51,20 +51,5 @@ services:
       api: { condition: service_started }
     command: ["python", "-m", "app.worker"]
 
-  # Optional stand-in for ovc-agent:  docker compose --profile demo up -d
-  fake-agent:
-    <<: *app-base
-    profiles: ["demo"]
-    depends_on:
-      api: { condition: service_started }
-    environment:
-      <<: *app-env
-      # generated inventory is persisted here and reused on restart
-      OVC_FAKE_AGENT_STATE_FILE: /data/fake_agent_state.json
-    volumes:
-      - fake-agent-state:/data
-    command: ["python", "scripts/fake_agent.py"]
-
 volumes:
-  fake-agent-state:
   agent-binaries:

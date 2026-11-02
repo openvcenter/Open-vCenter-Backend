@@ -87,13 +87,6 @@ docker compose up -d
 curl localhost:8000/api/health          # {"ok":true,"db":true,"cache":true,"rabbit":true}
 ```
 
-Optional stand-in for the Go agent (responds for hosts you've already created,
-posts synthetic inventory + executes power actions - no Windows needed):
-
-```sh
-docker compose --profile demo up -d
-```
-
 ## Run locally (without Docker)
 
 Requires Python 3.11+ and the [dependencies](#dependencies) up.
@@ -108,11 +101,10 @@ alembic upgrade head
 
 uvicorn app.main:app --reload --port 8000    # terminal 1
 python -m app.worker                          # terminal 2
-python scripts/fake_agent.py                   # terminal 3 (optional demo agent)
 ```
 
 The DB starts empty - create a host with `POST /api/hosts {name}`, then use
-its **Setup Agent** config on the real host (or run `fake_agent.py` for a demo).
+its **Setup Agent** config on the real host.
 The host's FQDN and IP are filled in by the agent on its first `agent_status`.
 
 ## Environment

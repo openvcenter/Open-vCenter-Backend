@@ -8,7 +8,7 @@ REST API + RabbitMQ worker for **Open vCenter**. Part of a three-service suite:
   to agents **only** via RabbitMQ. Two processes: the API and the worker.
 - **infra-containers** (`../infra-containers`) - the actual Postgres / Valkey /
   RabbitMQ / Keycloak containers (`./start-containers.sh`). This repo does **not**
-  run them; `docker-compose.yml` here has only `api` + `worker` (+ `fake-agent`),
+  run them; `docker-compose.yml` here has only `api` + `worker`,
   reaching the infra via `host.docker.internal`. Creds: `ovc` / `ovc123`.
 - **ovc-agent** (Go, Windows) - runs on each Hyper-V host. Consumes `<hostid>.request`,
   replies on `<hostid>.response`, periodically posts inventory queues.
@@ -168,9 +168,8 @@ alembic/versions/0005_audit_events.py  audit_events
 alembic/versions/0006_rbac.py      roles, role_privileges, permissions (drops scope_grants);
                                    seeds the built-in + sample roles
 docs/agent-queue-contract.md       every request/response/payload on the agent queues
-scripts/fake_agent.py              stand-in for ovc-agent (compose profile "demo"); needs hosts created first
 scripts/release.sh                 release X.Y.Z: bump pyproject version, commit, annotated tag (README "Releasing")
-docker-compose.yml                 api + worker (+ fake-agent) only - infra is ../infra-containers.
+docker-compose.yml                 api + worker only - infra is ../infra-containers.
                                    DB starts EMPTY - no seed; register hosts via POST /api/hosts
 ```
 
