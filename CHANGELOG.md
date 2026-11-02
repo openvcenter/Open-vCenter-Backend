@@ -8,6 +8,44 @@ All notable changes to ovc-backend. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+
+### Added
+
+- Role-based access control. Privileges (`vm.power`, `vm.console`,
+  `host.maintenance`, `rbac.manage`, …) make up roles; a permission grants a
+  role to an identity-provider group on global, a cluster, a host, a folder or
+  a VM, optionally propagating to what is below. A VM's own permissions
+  override the rest, otherwise it gets the union of its folder and its host;
+  the most specific level wins and No access blocks a path. Built-in roles
+  Administrator, Read-only and No access, plus editable sample roles.
+- Every mutating route checks its privilege (VM actions through
+  `VM_ACTION_PRIVILEGES`). Lists show only granted objects; the host / cluster
+  of a visible VM stays readable. Creating, renaming, moving and removing hosts
+  and clusters needs the privilege globally, and a folder is managed from its
+  cluster or host - a permission on an object covers what is inside it, not the
+  object itself. A delegate can't grant a role with privileges they lack.
+- API: `/rbac/catalog`, `/roles` (CRUD + clone), `/permissions` (CRUD, direct
+  and inherited), `/rbac/groups`, `/me/privileges` (batched), `/rbac/effective`
+  (why a group may do what). Role and permission changes are audited.
+- `GET /vms/{id}/console` (`vm.console`) and `GET /hosts/{id}/console`
+  (`host.console`): where a console connects; the frontend tunnel no longer
+  takes an address from the browser.
+- Permissions follow deletes of clusters, hosts, folders and VMs, plus an hourly
+  orphan sweeper in the worker.
+- Migration 0006: `roles`, `role_privileges`, `permissions`; `users.groups`
+  replaces `users.roles`; `scope_grants` is dropped.
+
+### Changed
+
+- The user's groups are read from the token at `OVC_OIDC_GROUPS_CLAIM`
+  (default `resource_access.${client_id}.roles`, the Keycloak client roles;
+  `groups` for Keycloak groups, Entra ID, Okta). It replaces
+  `OVC_OIDC_ROLES_CLAIM`. Members of `OVC_ADMIN_GROUP` (default
+  `ADMINISTRATOR`) are superusers; it replaces `OVC_ADMIN_ROLE`.
+- `GET /me` returns `groups`, `superuser` and `globalPrivileges` instead of
+  `roles` and `scopes`.
+
 ## [0.2.1] - 2026-10-17
 
 ### Changed
@@ -65,7 +103,8 @@ All notable changes to ovc-backend. The format follows
 
 First public release.
 
-[Unreleased]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.1...HEAD
+[Unreleased]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.1...0.3.0
 [0.2.1]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.1.0...0.1.1
