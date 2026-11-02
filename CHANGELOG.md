@@ -8,6 +8,29 @@ All notable changes to ovc-backend. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-02
+
+### Added
+
+- Per-task timeouts computed by the backend (`app/task_timeouts.py`) and sent
+  to the agent as `AgentRequest.timeout_seconds` (ovc-agent 1.0.8 kills the job
+  after it; older agents ignore it). Long kinds keep their base and add a disk
+  budget: `vm_create` / `vm_edit` from the disks in the params (Fixed
+  `size_gb` × 10s, minimum 120s; Dynamic 60s), `vm_move` / `vm_rename` /
+  `vm_export_template` / `vm_clone` from the disks they copy (10s per GB used).
+- Migration 0007: `tasks.timeout_seconds`, the task's own backend deadline
+  (agent timeout + 300s). The timeout sweeper and the VM-lock TTL use it, so a
+  large Fixed disk or clone is no longer timed out while the agent still works.
+
+### Removed
+
+- `scripts/fake_agent.py` and the compose `demo` profile. The frontend's demo
+  mode runs Open vCenter without a Hyper-V host.
+
+### Changed
+
+- README lists the dependencies instead of the local infra setup.
+
 ## [0.3.0] - 2026-11-02
 
 ### Added
@@ -103,7 +126,8 @@ All notable changes to ovc-backend. The format follows
 
 First public release.
 
-[Unreleased]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.1...0.3.0
 [0.2.1]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.1.1...0.2.0
