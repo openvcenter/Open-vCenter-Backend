@@ -2,7 +2,6 @@ name: Build and push backend image
 
 on:
   push:
-    branches: [main]
     tags:
       - "*.*.*"
   workflow_dispatch: {}
@@ -30,11 +29,13 @@ jobs:
       - name: Compute image tags
         id: tags
         run: |
+          # A release tag publishes :<version> and moves :latest; a manual run
+          # from a branch only publishes :<sha>, leaving :latest on the release.
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            TAGS="${{ env.IMAGE }}:${{ github.ref_name }}"
+            TAGS="${{ env.IMAGE }}:${{ github.ref_name }}
+          ${{ env.IMAGE }}:latest"
           else
-            TAGS="${{ env.IMAGE }}:latest
-          ${{ env.IMAGE }}:${{ github.sha }}"
+            TAGS="${{ env.IMAGE }}:${{ github.sha }}"
           fi
           {
             echo "list<<EOF"

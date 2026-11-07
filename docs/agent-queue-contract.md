@@ -87,9 +87,27 @@ object - `vm_id`, `action`, and the per-action keys all sit flat on `params`.
 | `vm_restart`         | `actions/restart`         | `Restarting`                      | VM restarted, running                                                                                                                                                                                          |
 | `vm_pause`           | `actions/pause`           | `Pausing`                         | `Suspend-VM` on the VM (a `vm_resume` function runs `Resume-VM`)                                                                                                                                               |
 | `vm_delete`          | `DELETE /vms/{id}`        | `Deleting`                        | VM removed from the host. Params: `remove_files` (bool, default `false`) - when `true` the agent also deletes the VM's folder/files from disk after `Remove-VM`. `DELETE /vms/{id}?remove_files=true` sets it. |
-| `vm_enable_metrics`  | `actions/enable_metrics`  | _(none - power state untouched)_  | `Enable-VMResourceMetering` on the VM                                                                                                                                                                          |
-| `vm_disable_metrics` | `actions/disable_metrics` | _(none)_                          | `Disable-VMResourceMetering` on the VM                                                                                                                                                                         |
 | `vm_create`          | `POST /vms`               | `Unknown` (placeholder row)       | new VM created on the host - **stub on `ovc-agent-hyperv` today**                                                                                                                                              |
+
+#### `set_metrics_config` - metrics collection interval
+
+Not a Task: no `Task` row, no `AgentResponse`. Sent by
+`app/services/app_settings.py::send_metrics_config` when `PATCH /settings` changes
+`metricsIntervalSeconds` (to every host with an agent), and by
+`apply_agent_status` whenever an agent reports a `metrics_interval` different
+from `app_settings.metrics_interval_seconds`. The agent applies it at once
+(saving it next to its binary) and reports it back in its next `agent_status`.
+
+```json
+{
+  "id": "4c1f…",
+  "function": "set_metrics_config",
+  "params": { "interval_seconds": 60 },
+  "requested_by": "system",
+  "issued_at": "2026-08-29T15:04:05.123456+00:00",
+  "timeout_seconds": null
+}
+```
 
 #### `vm_create` - creating a VM from scratch
 
@@ -342,25 +360,6 @@ terminal response. The matching `AgentRequest` it published is kept in
    last-value queue) can't re-create the row when consumed out of order. The
    next fresh snapshot that omits the GUID clears the tombstone.
 
-   _success (`vm_enable_metrics` / `vm_disable_metrics`)_ - no power-state change;
-   attach `vm_status` (carrying the fresh `metricsEnabled`) so it applies now,
-   else it waits for the next `vm_inventory`:
-
-   ```json
-   {
-     "id": "task_met…",
-     "function": "vm_enable_metrics",
-     "status": "succeeded",
-     "progress": 100,
-     "result": "metering enabled",
-     "error": null,
-     "vm_id": null,
-     "vm_state": null,
-     "vm_status": { "id": "b747349c-…", "metricsEnabled": true, "…": "…" },
-     "finished_at": "2026-08-29T15:07:00+00:00"
-   }
-   ```
-
    _failure:_
 
    ```json
@@ -412,8 +411,8 @@ The agent is not involved - it never sees the lock. Admin-only recovery endpoint
 ## Part 2 - Agent-published state queues
 
 The backend **never requests** these - the agent publishes them on its own
-schedule (`refresh_interval_vms` / `refresh_interval_host` / `metrics_interval` in
-the agent's `config.ini`). The worker subscribes to all of them
+schedule (`refresh_interval_vms` / `refresh_interval_host` in the agent's
+`config.ini`; the metrics interval comes from `set_metrics_config`). The worker subscribes to all of them
 (`app/worker/consumers.py`).
 
 ### `agent_status` - heartbeat
@@ -424,13 +423,16 @@ Consumed by `apply_agent_status`. Drives `Host.agent_version`,
 `OVC_AGENT_OFFLINE_AFTER_SECONDS`, default 120), plus `Host.fqdn` (from
 `fqdn`, falling back to `hostname`) and `Host.ip_address` (from `ip` /
 `ipAddress` / `primaryIp`) - these are **agent-resolved**, not asked for at
-registration.
+registration. `metrics_interval` is the metrics collection window the agent
+applies; when it differs from `app_settings.metrics_interval_seconds` the worker
+sends `set_metrics_config`.
 
 ```json
 {
   "version": "1.1.10",
   "vm_refresh_interval": 180,
   "host_refresh_interval": 600,
+  "metrics_interval": 300,
   "reported_at": "2026-08-29T15:04:00+00:00",
   "hypervisor": "hyperv",
   "agent_type": "ovc-agent-hyperv",
@@ -490,7 +492,6 @@ already in canonical form passes through.
       "uptimeSec": 512340,
       "vcpu": 4,
       "cpuUsagePercent": 5,
-      "metricsEnabled": true,
       "memoryBytes": 8589934592,
       "memoryMinBytes": 2147483648,
       "memoryMaxBytes": 17179869184,
@@ -554,7 +555,6 @@ already in canonical form passes through.
 | `uptimeSec`                                         | `Vm.uptime_sec`                                                                                                                                                                      | `null`                              |
 | `vcpu`                                              | `Vm.vcpu`                                                                                                                                                                            | `1`                                 |
 | `cpuUsagePercent` (agent `cpuUsagePct`)             | `Vm.cpu_usage_percent` - a simple hypervisor average, **not** a time-series                                                                                                          | `null`                              |
-| `metricsEnabled`                                    | `Vm.metrics_enabled` - gates whether `vm_metrics` rows are written for this VM                                                                                                       | keeps existing (omit → unchanged)   |
 | `memoryBytes` (agent `memoryMb`, MiB)               | `Vm.memory_bytes`                                                                                                                                                                    | `0`                                 |
 | `memoryMinBytes` / `memoryMaxBytes`                 | `Vm.memory_min_bytes` / `Vm.memory_max_bytes`                                                                                                                                        | `null`                              |
 | `memoryDynamic`                                     | `Vm.memory_dynamic`                                                                                                                                                                  | `false`                             |
@@ -704,16 +704,17 @@ stable id (e.g. a content hash) keeps rows steady across refreshes.
 
 ### `vm_metrics` - quick per-VM metrics
 
-Consumed by `apply_vm_metrics`. **Append** one sample row per listed VM; the worker
-keeps only the last `OVC_METRICS_RETENTION_SECONDS` (default 3600 s) and drops the
-rest. Only include VMs that have Hyper-V resource metering enabled. The backend
-**also** filters: a sample is stored only when `Vm.metrics_enabled` is true for
-that VM (unknown or non-metered VMs are silently skipped - see the `skipped=`
-count in the log line). Full payload is stored verbatim in `detail`.
+The agent samples PDH counters every 5 s and publishes one message per collection
+interval (`app_settings.metrics_interval_seconds`, see `set_metrics_config`).
+Values are the **mean** over the window's samples, `cpuMaxPercent` the peak; rates
+are per second. Every VM that ran during the window is listed - no resource
+metering needed.
 
-For the non-time-series counters (a plain hypervisor average of CPU % and memory
-demand), don't rely on `vm_metrics` - those ride on every `vm_inventory` as
-`cpuUsagePercent` / `memoryDemandBytes` and are stored on the `Vm` row itself.
+Consumed by `apply_vm_metrics`. **Append** one row per listed VM whose `id` is a
+known VM GUID on this host (others are counted as `skipped=`); the worker keeps
+only the metrics retention window (`app_settings.metrics_retention_seconds`) and
+drops the rest. The full item is stored verbatim in `detail` (the per-disk list
+lives only there).
 
 ```json
 {
@@ -721,56 +722,94 @@ demand), don't rely on `vm_metrics` - those ride on every `vm_inventory` as
   "vms": [
     {
       "id": "b747349c-c90b-4126-bc2d-ef8ceb3444c4",
+      "name": "web-01",
       "cpuPercent": 12.5,
+      "cpuMaxPercent": 48.0,
       "memBytes": 6442450944,
-      "diskBytes": 64424509440,
-      "netRxBytes": 184320000,
-      "netTxBytes": 43520000
+      "memPressure": 72.0,
+      "diskReadBps": 1843200,
+      "diskWriteBps": 524288,
+      "diskReadIops": 42.5,
+      "diskWriteIops": 18.0,
+      "diskLatencyMs": 1.6,
+      "netRxBps": 125000,
+      "netTxBps": 43000,
+      "disks": [
+        {
+          "path": "C:\\ClusterStorage\\Volume1\\web-01\\web-01.vhdx",
+          "readBps": 1843200,
+          "writeBps": 524288,
+          "readIops": 42.5,
+          "writeIops": 18.0,
+          "latencyMs": 1.6,
+          "queueLength": 0.1
+        }
+      ]
     }
   ]
 }
 ```
 
-| Field                       | Column                          | Notes                                |
-| --------------------------- | ------------------------------- | ------------------------------------ |
-| `id`                        | (row key → `vm_id`)             | must be a known VM GUID on this host |
-| `cpuPercent`                | `cpu_percent`                   | best-effort; `null` allowed          |
-| `memBytes`                  | `mem_bytes`                     |                                      |
-| `diskBytes`                 | `disk_bytes`                    |                                      |
-| `netRxBytes` / `netTxBytes` | `net_rx_bytes` / `net_tx_bytes` |                                      |
+| Field                                     | Column                                | Notes                                                   |
+| ----------------------------------------- | ------------------------------------- | ------------------------------------------------------- |
+| `id`                                      | (row key → `vm_id`)                   | VM GUID (case-insensitive)                              |
+| `cpuPercent` / `cpuMaxPercent`            | `cpu_percent` / `cpu_max_percent`     | average over the VM's virtual processors                |
+| `memBytes`                                | `mem_bytes`                           | Dynamic Memory physical memory, else assigned memory    |
+| `memPressure`                             | `mem_pressure`                        | Dynamic Memory average pressure (%), `null` without it |
+| `diskReadBps` / `diskWriteBps`            | `disk_read_bps` / `disk_write_bps`    | sum of the VM's virtual disks                           |
+| `diskReadIops` / `diskWriteIops`          | `disk_read_iops` / `disk_write_iops`  |                                                         |
+| `diskLatencyMs`                           | `disk_latency_ms`                     | IOPS-weighted across the VM's disks                     |
+| `netRxBps` / `netTxBps`                   | `net_rx_bps` / `net_tx_bps`           | sum of the VM's adapters                                |
+| `disks[]`                                 | kept only inside `detail`             | per virtual disk                                        |
 
 ### `host_metrics` - quick host metrics
 
-Consumed by `apply_host_metrics`. **Append** one sample; same last-hour retention.
-Full payload stored in `detail`.
+Consumed by `apply_host_metrics`. **Append** one row per collection window; same
+retention. Full payload stored in `detail`.
 
 ```json
 {
   "reported_at": "2026-08-29T15:05:00+00:00",
   "cpuPercent": 37.0,
+  "cpuMaxPercent": 81.5,
   "memPercent": 61.4,
-  "diskLatencyMs": 1.8,
+  "memUsedBytes": 210453397504,
+  "memTotalBytes": 342732365824,
+  "diskReadBps": 52428800,
+  "diskWriteBps": 20971520,
+  "diskReadIops": 850,
+  "diskWriteIops": 420,
+  "diskReadLatencyMs": 0.9,
+  "diskWriteLatencyMs": 1.4,
+  "diskLatencyMaxMs": 12.0,
   "netRxBps": 12500000,
   "netTxBps": 3400000,
   "disks": [
     {
       "name": "0 C:",
+      "readBps": 1048576,
+      "writeBps": 2097152,
+      "readIops": 20,
+      "writeIops": 35,
       "readLatencyMs": 0.4,
       "writeLatencyMs": 1.1,
-      "queueLength": 0.0
+      "queueLength": 0.0,
+      "busyPercent": 3.5
     }
   ],
   "net": [{ "name": "Ethernet 1", "rxBps": 12000000, "txBps": 3200000 }]
 }
 ```
 
-| Field                   | Column                                                      |
-| ----------------------- | ----------------------------------------------------------- |
-| `cpuPercent`            | `cpu_percent`                                               |
-| `memPercent`            | `mem_percent`                                               |
-| `diskLatencyMs`         | `disk_latency_ms` (avg across volumes)                      |
-| `netRxBps` / `netTxBps` | `net_rx_bps` / `net_tx_bps`                                 |
-| `disks[]` / `net[]`     | kept only inside `detail` (per-device breakdown for the UI) |
+| Field                                         | Column                                             |
+| --------------------------------------------- | -------------------------------------------------- |
+| `cpuPercent` / `cpuMaxPercent`                | `cpu_percent` / `cpu_max_percent` (hypervisor logical processors) |
+| `memPercent`                                  | `mem_percent`                                      |
+| `diskReadBps` / `diskWriteBps`                | `disk_read_bps` / `disk_write_bps` (all physical disks) |
+| `diskReadIops` / `diskWriteIops`              | `disk_read_iops` / `disk_write_iops`               |
+| `diskReadLatencyMs` / `diskWriteLatencyMs`    | `disk_read_latency_ms` / `disk_write_latency_ms`   |
+| `netRxBps` / `netTxBps`                       | `net_rx_bps` / `net_tx_bps`                        |
+| `memUsedBytes`, `memTotalBytes`, `diskLatencyMaxMs`, `disks[]`, `net[]` | kept only inside `detail` |
 
 All scalar fields are nullable - send `null` (or omit) what you can't measure.
 
@@ -780,14 +819,15 @@ All scalar fields are nullable - send `null` (or omit) what you can't measure.
 
 ```
 backend ──> <hostid>.request     { id, function, params:{vm_id}, requested_by, issued_at }
+backend ──> <hostid>.request     { id, function:"set_metrics_config", params:{interval_seconds} }   (no response)
 agent   ──> <hostid>.response     { id, function, status, progress, progress_message, result, error, vm_id, vm_state, vm_status, template, finished_at }
                                     status: running (0..n)  →  succeeded | failed (exactly 1)
 
-agent   ──> <hostid>.agent_status         { version, vm_refresh_interval, host_refresh_interval, reported_at, … }
-agent   ──> <hostid>.vm_inventory         { reported_at, vms:[ {id,name,state,firmware,uptimeSec,vcpu,cpuUsagePercent,metricsEnabled,memoryBytes,memoryMin/MaxBytes,memoryDynamic,memoryDemandBytes,secureBoot(+Template),nestedVirtualization,autoStart/StopAction,autoStartDelaySec,configPath,dvdPath,highlyAvailable,disks,nics,snapshots,notes,createdAt} ] }
+agent   ──> <hostid>.agent_status         { version, vm_refresh_interval, host_refresh_interval, metrics_interval, reported_at, … }
+agent   ──> <hostid>.vm_inventory         { reported_at, vms:[ {id,name,state,firmware,uptimeSec,vcpu,cpuUsagePercent,memoryBytes,memoryMin/MaxBytes,memoryDynamic,memoryDemandBytes,secureBoot(+Template),nestedVirtualization,autoStart/StopAction,autoStartDelaySec,configPath,dvdPath,highlyAvailable,disks,nics,snapshots,notes,createdAt} ] }
 agent   ──> <hostid>.host_inventory       { reported_at, hardware:{cpu,memoryBytes,storage,os,network} }
 agent   ──> <hostid>.template_inventory   { reported_at, items:[ {id,name,path,sizeBytes,diskSizeBytes,notes,cpuCount,memoryMb,guestOs,createdAt} ] }
 agent   ──> <hostid>.iso_inventory        { reported_at, items:[ {id,name,path,sizeBytes} ] }
-agent   ──> <hostid>.vm_metrics           { reported_at, vms:[ {id,cpuPercent,memBytes,diskBytes,netRxBytes,netTxBytes} ] }
-agent   ──> <hostid>.host_metrics         { reported_at, cpuPercent, memPercent, diskLatencyMs, netRxBps, netTxBps, disks[], net[] }
+agent   ──> <hostid>.vm_metrics           { reported_at, vms:[ {id,name,cpuPercent,cpuMaxPercent,memBytes,memPressure,diskRead/WriteBps,diskRead/WriteIops,diskLatencyMs,netRx/TxBps,disks[]} ] }
+agent   ──> <hostid>.host_metrics         { reported_at, cpuPercent, cpuMaxPercent, memPercent, memUsed/TotalBytes, diskRead/WriteBps, diskRead/WriteIops, diskRead/WriteLatencyMs, diskLatencyMaxMs, netRx/TxBps, disks[], net[] }
 ```

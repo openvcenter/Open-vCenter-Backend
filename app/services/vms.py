@@ -96,8 +96,6 @@ ACTION_MAP: dict[str, tuple[str, str | None]] = {
     "restart": ("vm_restart", "Restarting"),
     "pause": ("vm_pause", "Pausing"),
     "delete": ("vm_delete", "Deleting"),
-    "enable_metrics": ("vm_enable_metrics", None),
-    "disable_metrics": ("vm_disable_metrics", None),
     # --- management actions -------------------------------------------------
     # These are stubs on the agent side for now: the backend queues the task and
     # publishes the AgentRequest, and the worker's timeout sweeper flips it to
@@ -129,8 +127,6 @@ VM_ACTION_PRIVILEGES: dict[str, str | None] = {
     "restart": "vm.power",
     "pause": "vm.power",
     "delete": "vm.delete",
-    "enable_metrics": "vm.config",
-    "disable_metrics": "vm.config",
     "rename": "vm.config",
     "edit": "vm.config",
     "migrate": "vm.migrate",
@@ -324,7 +320,6 @@ async def request_vm_create(
         nested_virtualization=body.nested_virtualization,
         highly_available=body.ha_enabled,
         notes=(body.notes or "").strip() or None,
-        metrics_enabled=False,
         # brand-new row: initialise the selectin relationships so the synchronous
         # serializer (vm_out) never triggers a lazy load → MissingGreenlet
         disks=[],
@@ -541,7 +536,6 @@ async def request_vm_clone(
         nested_virtualization=body.nested_virtualization,
         highly_available=body.ha_enabled and host.cluster_id is not None,
         notes=notes,
-        metrics_enabled=False,
         disks=[],
         nics=[],
         snapshots=[],

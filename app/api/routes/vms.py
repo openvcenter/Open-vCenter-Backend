@@ -15,7 +15,6 @@ from ...cache import (
     release_all_vm_locks,
     release_vm_lock,
 )
-from ...config import get_settings
 from ...models import Folder, Host, Task, Template, Vm, VmMetric, VmThumbnail
 from ...schemas import (
     ConsoleTargetOut,
@@ -30,6 +29,7 @@ from ...schemas import (
     VmOut,
     VmTagsUpdate,
 )
+from ...services.app_settings import metrics_retention_seconds
 from ...services.audit import changes, record
 from ...services.console import HYPERV_CONSOLE_PORT, console_target
 from ...services.organization import move_vm_to_folder
@@ -303,12 +303,10 @@ async def get_vm_console(vm_id: str, db: DbSession, scope: Scope) -> ConsoleTarg
 async def list_vm_metrics(
     vm_id: str, db: DbSession, scope: Scope
 ) -> list[VmMetricSample]:
-    """Quick VM metrics for the last hour, oldest first. Empty until Hyper-V
-    resource metering is enabled on the VM (see the enable_metrics action)."""
+    """Quick VM metrics for the retention window (app settings), oldest first.
+    Empty while the VM is off (the agent only reports running VMs)."""
     await _get_visible_vm(db, scope, vm_id)
-    since = datetime.now(UTC) - timedelta(
-        seconds=get_settings().metrics_retention_seconds
-    )
+    since = datetime.now(UTC) - timedelta(seconds=await metrics_retention_seconds(db))
     rows = (
         await db.execute(
             select(VmMetric)

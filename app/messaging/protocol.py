@@ -63,6 +63,8 @@ class AgentStatusPayload(BaseModel):
     ip: str | None = None
     os_version: str | None = None
     uptime_seconds: int | None = None
+    # metrics collection window the agent is applying (see MetricsConfigParams)
+    metrics_interval: int | None = None
     reported_at: str = Field(default_factory=_now)
 
 
@@ -83,20 +85,45 @@ class ImageInventoryPayload(BaseModel):
 
 
 # Quick-metrics payloads (short time-series queues, NOT last-value). The worker
-# consumes these as raw dicts; these models just document the wire shape.
+# consumes these as raw dicts; these models just document the wire shape. The
+# metric fields are camelCase on the wire (cpuPercent, diskReadBps, ...); each is
+# the mean over the agent's 5 s samples in one collection window, *Max the peak.
 
 
 class HostMetricsPayload(BaseModel):
     reported_at: str = Field(default_factory=_now)
     cpu_percent: float | None = None
+    cpu_max_percent: float | None = None
     mem_percent: float | None = None
-    disk_latency_ms: float | None = None
-    net_rx_bps: int | None = None
-    net_tx_bps: int | None = None
+    mem_used_bytes: float | None = None
+    mem_total_bytes: float | None = None
+    disk_read_bps: float | None = None
+    disk_write_bps: float | None = None
+    disk_read_iops: float | None = None
+    disk_write_iops: float | None = None
+    disk_read_latency_ms: float | None = None
+    disk_write_latency_ms: float | None = None
+    disk_latency_max_ms: float | None = None
+    net_rx_bps: float | None = None
+    net_tx_bps: float | None = None
+    # [{name, readBps, writeBps, readIops, writeIops, readLatencyMs,
+    #   writeLatencyMs, queueLength, busyPercent}]
     disks: list[dict[str, Any]] = Field(default_factory=list)
-    net: list[dict[str, Any]] = Field(default_factory=list)
+    net: list[dict[str, Any]] = Field(default_factory=list)  # [{name, rxBps, txBps}]
 
 
 class VmMetricsPayload(BaseModel):
     reported_at: str = Field(default_factory=_now)
+    # [{id (Hyper-V GUID), name, cpuPercent, cpuMaxPercent, memBytes, memPressure,
+    #   diskReadBps, diskWriteBps, diskReadIops, diskWriteIops, diskLatencyMs,
+    #   netRxBps, netTxBps, disks: [{path, readBps, writeBps, readIops, writeIops,
+    #   latencyMs, queueLength}]}]
     vms: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MetricsConfigParams(BaseModel):
+    """params of set_metrics_config: the agent's collection window. The agent
+    applies it without a Task or AgentResponse and reports it back as
+    `metrics_interval` in agent_status."""
+
+    interval_seconds: int

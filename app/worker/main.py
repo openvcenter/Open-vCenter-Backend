@@ -23,6 +23,7 @@ from ..messaging import (
 )
 from ..models import Host, HostMetric, Task, Vm, VmMetric
 from ..models.task import TERMINAL_TASK_STATUSES
+from ..services.app_settings import metrics_retention_seconds
 from ..services.audit import prune_events, settle_task_events
 from ..services.rbac import delete_orphan_permissions
 from ..task_timeouts import task_timeout_seconds
@@ -199,10 +200,10 @@ async def _metrics_retention_sweeper() -> None:
     samples from hosts that stopped reporting."""
     while True:
         await asyncio.sleep(METRICS_SWEEP_INTERVAL)
-        cutoff = datetime.now(UTC) - timedelta(
-            seconds=_settings.metrics_retention_seconds
-        )
         async with session_scope() as db:
+            cutoff = datetime.now(UTC) - timedelta(
+                seconds=await metrics_retention_seconds(db)
+            )
             for model in (HostMetric, VmMetric):
                 result = await db.execute(
                     delete(model).where(model.ts < cutoff)

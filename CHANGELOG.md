@@ -8,6 +8,32 @@ All notable changes to ovc-backend. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `GET` / `PATCH /settings` (`settings.manage`) and migration 0008
+  (`app_settings`): metrics retention (1 h - 7 days) and
+  `vmConsoleNonAdminAccess` (stored only).
+- Metrics collection interval (`metricsIntervalSeconds`, 30 s - 10 min, default
+  5 min) in `/settings`, pushed to agents with `set_metrics_config` and
+  re-sent when an agent's `agent_status` reports another value.
+- Host and VM metrics carry disk read/write throughput, IOPS and latency, plus
+  the CPU peak of the window; VM memory pressure (migration 0009).
+
+### Changed
+
+- CI builds the container image only for release tags, which now also move
+  `:latest`. Pushes to `main` build nothing.
+- Metrics retention is read from `app_settings`, so it changes without a restart.
+- VM metrics are stored for every VM the agent reports (needs ovc-agent-hyperv
+  with the PDH sampler); rates are per second, no client-side deltas.
+
+### Removed
+
+- `OVC_METRICS_RETENTION_SECONDS`: the retention is set from Application
+  Preferences.
+- The `enable_metrics` / `disable_metrics` VM actions and `Vm.metricsEnabled`;
+  metrics no longer depend on Hyper-V resource metering.
+
 ## [0.4.0] - 2026-11-02
 
 ### Added

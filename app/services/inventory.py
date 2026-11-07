@@ -19,7 +19,6 @@ from ..cache import (
     release_vm_lock,
     set_vm_state,
 )
-from ..config import get_settings
 from ..ids import new_id
 from ..messaging import AgentResponse
 from ..models import (
@@ -36,6 +35,11 @@ from ..models import (
     VmThumbnail,
 )
 from . import audit
+from .app_settings import (
+    metrics_interval_seconds,
+    metrics_retention_seconds,
+    send_metrics_config,
+)
 from .rbac import delete_permissions
 
 log = logging.getLogger(__name__)
@@ -89,6 +93,15 @@ async def apply_agent_status(db: AsyncSession, host_id: str, payload: dict) -> N
     if (ip := payload.get("ip") or payload.get("ipAddress") or payload.get("primaryIp")):
         host.ip_address = ip
     host.agent_last_seen = _parse_dt(payload.get("reported_at")) or _now()
+    # The metrics collection interval lives in app_settings; an agent that
+    # reports a different one (restart, missed push) gets set_metrics_config.
+    if (reported := payload.get("metrics_interval")) is not None:
+        wanted = await metrics_interval_seconds(db)
+        if reported != wanted:
+            log.info(
+                "agent metrics_interval=%s host=%s, sending %s", reported, host.name, wanted
+            )
+            await send_metrics_config(host.short_id, wanted)
 
 
 # ---- vm_inventory ---------------------------------------------------------
@@ -265,7 +278,6 @@ def normalize_vm(item: dict) -> dict:
         "vmUuid": item.get("id") or item.get("vmId"),
         "name": item.get("name"),
         "state": item.get("state", "Unknown"),
-        "metricsEnabled": item.get("metricsEnabled"),
         "firmware": _firmware_of(item),
         "guestOs": item.get("guestOs"),
         "uptimeSec": item.get("uptimeSec"),
@@ -415,9 +427,6 @@ def _write_vm_row(
 
     if has("state", "powerState"):
         vm.state = item.get("state") or ("Unknown" if not partial else vm.state)
-
-    if raw.get("metricsEnabled") is not None:
-        vm.metrics_enabled = bool(item.get("metricsEnabled"))
 
     # Only reported while the VM runs (guest integration) - an absent/blank value
     # means "unknown now", so an Off VM keeps the last known OS.
@@ -697,10 +706,10 @@ async def apply_host_inventory(db: AsyncSession, host_id: str, payload: dict) ->
     log.info("host_inventory host=%s id=%s", host.name, host.short_id)
 
 
-# ---- host_metrics / vm_metrics (quick metrics, last hour only) ---------
+# ---- host_metrics / vm_metrics (quick metrics, retention from app_settings) --
 
-def _metrics_cutoff() -> datetime:
-    return _now() - timedelta(seconds=get_settings().metrics_retention_seconds)
+async def _metrics_cutoff(db: AsyncSession) -> datetime:
+    return _now() - timedelta(seconds=await metrics_retention_seconds(db))
 
 
 def _as_int(value) -> int | None:
@@ -727,17 +736,23 @@ async def apply_host_metrics(db: AsyncSession, host_id: str, payload: dict) -> N
             host_id=host_id,
             ts=_parse_dt(payload.get("reportedAt") or payload.get("reported_at")) or _now(),
             cpu_percent=_as_float(payload.get("cpuPercent")),
+            cpu_max_percent=_as_float(payload.get("cpuMaxPercent")),
             mem_percent=_as_float(payload.get("memPercent")),
-            disk_latency_ms=_as_float(payload.get("diskLatencyMs")),
-            net_rx_bps=_as_int(payload.get("netRxBps")),
-            net_tx_bps=_as_int(payload.get("netTxBps")),
+            disk_read_bps=_as_float(payload.get("diskReadBps")),
+            disk_write_bps=_as_float(payload.get("diskWriteBps")),
+            disk_read_iops=_as_float(payload.get("diskReadIops")),
+            disk_write_iops=_as_float(payload.get("diskWriteIops")),
+            disk_read_latency_ms=_as_float(payload.get("diskReadLatencyMs")),
+            disk_write_latency_ms=_as_float(payload.get("diskWriteLatencyMs")),
+            net_rx_bps=_as_float(payload.get("netRxBps")),
+            net_tx_bps=_as_float(payload.get("netTxBps")),
             detail=payload,
         )
     )
     await db.execute(
         delete(HostMetric)
         .where(HostMetric.host_id == host_id)
-        .where(HostMetric.ts < _metrics_cutoff())
+        .where(HostMetric.ts < await _metrics_cutoff(db))
     )
     log.info("host_metrics host=%s id=%s", host.name, host.short_id)
 
@@ -746,16 +761,12 @@ async def apply_vm_metrics(db: AsyncSession, host_id: str, payload: dict) -> Non
     items = payload.get("vms", [])
     hlabel = await _host_label(db, host_id)
     ts = _parse_dt(payload.get("reportedAt") or payload.get("reported_at")) or _now()
-    # agent keys samples by the Hyper-V GUID; translate to our internal id. Only
-    # metered VMs get a vm_metrics row - the time-series is opt-in per VM.
+    # agent keys samples by the Hyper-V GUID; translate to our internal id. The
+    # agent reports every running VM.
     by_uuid = {
-        row.vm_uuid: row.id
+        row.vm_uuid.lower(): row.id
         for row in (
-            await db.execute(
-                select(Vm.id, Vm.vm_uuid).where(
-                    Vm.host_id == host_id, Vm.metrics_enabled.is_(True)
-                )
-            )
+            await db.execute(select(Vm.id, Vm.vm_uuid).where(Vm.host_id == host_id))
         ).all()
         if row.vm_uuid
     }
@@ -763,9 +774,9 @@ async def apply_vm_metrics(db: AsyncSession, host_id: str, payload: dict) -> Non
     skipped = 0
     for item in items:
         vm_uuid = item.get("id") or item.get("vmId")
-        vm_id = by_uuid.get(vm_uuid)
+        vm_id = by_uuid.get(str(vm_uuid).lower())
         if vm_id is None:
-            # unknown VM, or one without metering enabled - nothing to store
+            # not inventoried yet - nothing to attach the sample to
             skipped += 1
             continue
         db.add(
@@ -773,10 +784,16 @@ async def apply_vm_metrics(db: AsyncSession, host_id: str, payload: dict) -> Non
                 vm_id=vm_id,
                 ts=ts,
                 cpu_percent=_as_float(item.get("cpuPercent")),
-                mem_bytes=_as_int(item.get("memBytes")),
-                disk_bytes=_as_int(item.get("diskBytes")),
-                net_rx_bytes=_as_int(item.get("netRxBytes")),
-                net_tx_bytes=_as_int(item.get("netTxBytes")),
+                cpu_max_percent=_as_float(item.get("cpuMaxPercent")),
+                mem_bytes=_as_float(item.get("memBytes")),
+                mem_pressure=_as_float(item.get("memPressure")),
+                disk_read_bps=_as_float(item.get("diskReadBps")),
+                disk_write_bps=_as_float(item.get("diskWriteBps")),
+                disk_read_iops=_as_float(item.get("diskReadIops")),
+                disk_write_iops=_as_float(item.get("diskWriteIops")),
+                disk_latency_ms=_as_float(item.get("diskLatencyMs")),
+                net_rx_bps=_as_float(item.get("netRxBps")),
+                net_tx_bps=_as_float(item.get("netTxBps")),
                 detail=item,
             )
         )
@@ -784,7 +801,7 @@ async def apply_vm_metrics(db: AsyncSession, host_id: str, payload: dict) -> Non
 
     await db.execute(
         delete(VmMetric)
-        .where(VmMetric.ts < _metrics_cutoff())
+        .where(VmMetric.ts < await _metrics_cutoff(db))
         .where(VmMetric.vm_id.in_(select(Vm.id).where(Vm.host_id == host_id)))
     )
     log.info("vm_metrics %s vms=%d skipped=%d", hlabel, inserted, skipped)

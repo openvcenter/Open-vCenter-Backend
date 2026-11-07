@@ -12,6 +12,7 @@ from . import (
     hosts,
     images,
     rbac,
+    settings,
     tags,
     tasks,
     vlans,
@@ -32,5 +33,6 @@ api_router.include_router(tasks.router)
 api_router.include_router(images.router)
 api_router.include_router(audit.router)
 api_router.include_router(rbac.router)
+api_router.include_router(settings.router)
 
 __all__ = ["api_router"]

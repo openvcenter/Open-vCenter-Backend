@@ -40,7 +40,7 @@ first set from `POST /hosts` (default `hyperv`) and then confirmed by
 | Process    | Entry                                    | Job                                                                                                                                                                                                                 |
 | ---------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **API**    | `python -m app` / `uvicorn app.main:app` | serve `/api/*`; on startup, ensure every known host's RabbitMQ queues exist; publish agent requests; create `Task` rows                                                                                             |
-| **Worker** | `python -m app.worker`                   | consume every host's `response` + 5 inventory + 2 metrics queues; update Postgres and the Valkey VM-state cache; time out stale tasks; prune quick-metrics older than `OVC_METRICS_RETENTION_SECONDS` (default 1 h) and audit events older than `OVC_AUDIT_RETENTION_DAYS` (default 365, 0 = keep) |
+| **Worker** | `python -m app.worker`                   | consume every host's `response` + 5 inventory + 2 metrics queues; update Postgres and the Valkey VM-state cache; time out stale tasks; prune quick-metrics older than `app_settings.metrics_retention_seconds` (default 1 h) and audit events older than `OVC_AUDIT_RETENTION_DAYS` (default 365, 0 = keep) |
 
 They share the `app` package (models, config, messaging, services).
 
@@ -127,7 +127,6 @@ app/
                        /vms/{id}/tags). Tag.vm_count is counted within the
                        caller's visibility (Access.vm_clause).
     vms.py             request_vm_action() -> Task + optimistic state + publish.
-                       enable_metrics/disable_metrics = no power-state change.
                        VM_ACTION_PRIVILEGES: the privilege each ACTION_MAP entry
                        needs (import-time assert keeps the two in sync).
     inventory.py       apply_* : agent payloads -> DB + cache (worker side).
@@ -151,7 +150,8 @@ app/
                        (+ GET /vms/{id}/thumbnail -> image/jpeg, X-Captured-At), tags
                        (/tag-categories, /tags), tasks, images, agent_binaries,
                        audit (GET /audit-events), rbac (/rbac/catalog, /roles,
-                       /permissions, /rbac/groups, /me/privileges, /rbac/effective)
+                       /permissions, /rbac/groups, /me/privileges, /rbac/effective),
+                       settings (GET / PATCH /settings)
   worker/
     main.py            connect, subscribe every host's consumed queues, rescan for
                        new hosts every 15s, timeout sweeper every 30s, metrics
@@ -261,6 +261,23 @@ Consoles: the frontend's Guacamole tunnel asks `GET /vms/{id}/console`
 (`vm.console`) or `GET /hosts/{id}/console` (`host.console`) where to connect.
 OVC only gates whether the console is offered; the host still decides who may
 sign in (on Hyper-V: its local groups).
+
+## Application settings
+
+`app_settings`: one row (id 1), one typed column per option. A new option is a
+migration, a model field, the `AppSettings*` schemas and `routes/settings.py`
+`_snapshot`.
+
+- `GET /settings`: anyone. `PATCH /settings`: `settings.manage`, audited as
+  `settings.update`.
+- `metrics_retention_seconds`: one of `METRICS_RETENTION_OPTIONS` (default 3600),
+  read from the DB on each use.
+- `metrics_interval_seconds`: one of `METRICS_INTERVAL_OPTIONS` (default 300) -
+  the agents' metrics collection window. Pushed with `set_metrics_config`
+  (`send_metrics_config`: no Task, no response) to every host with an agent when
+  PATCH changes it, and again from `apply_agent_status` whenever an agent's
+  reported `metrics_interval` differs.
+- `vm_console_non_admin_access`: stored only, not enforced yet.
 
 ## Audit log
 

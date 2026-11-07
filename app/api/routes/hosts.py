@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from ...cache import get_vm_locks, get_vm_states
-from ...config import get_settings
 from ...models import Cluster, Host, HostMetric, Iso, Task, Template, Vm
 from ...models.task import TERMINAL_TASK_STATUSES
 from ...schemas import (
@@ -27,6 +26,7 @@ from ...schemas import (
 from ...schemas.agent_binary import AgentUpgradeRequest
 from ...services.agent_store import verify_scope
 from ...services.agent_upgrade import request_agent_upgrade, resolve_upgrade_binary
+from ...services.app_settings import metrics_retention_seconds
 from ...services.audit import changes, record, settle_task_events
 from ...services.console import RDP_PORT, console_target
 from ...services.host_actions import (
@@ -309,12 +309,10 @@ async def host_action(
 async def list_host_metrics(
     host_id: str, db: DbSession, scope: Scope
 ) -> list[HostMetricSample]:
-    """Quick host metrics for the last hour (CPU, memory, disk latency, network),
+    """Quick host metrics for the retention window (CPU, memory, disk, network),
     oldest sample first. Not a monitoring stack - see app/models/metric.py."""
     await _get_visible_host(db, scope, host_id)
-    since = datetime.now(UTC) - timedelta(
-        seconds=get_settings().metrics_retention_seconds
-    )
+    since = datetime.now(UTC) - timedelta(seconds=await metrics_retention_seconds(db))
     rows = (
         await db.execute(
             select(HostMetric)

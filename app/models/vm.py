@@ -130,11 +130,6 @@ class Vm(Base, TimestampMixin):
         Boolean, nullable=False, server_default=text("false")
     )
 
-    # whether hypervisor resource metering is enabled on this VM (agent-reported
-    # via vm_inventory). Gates whether the VM shows up in <hostid>.vm_metrics.
-    metrics_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
-    )
 
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # VM creation time reported by the agent (contract field `createdAt`)

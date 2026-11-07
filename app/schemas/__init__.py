@@ -8,6 +8,7 @@ from .agent_binary import (
     AgentRolloutSkip,
     AgentStorageInfoOut,
 )
+from .app_settings import AppSettingsOut, AppSettingsUpdate
 from .audit import AuditEventOut, AuditEventPage
 from .auth import HealthOut, MeOut
 from .cluster import ClusterCreate, ClusterOut, ClusterUpdate
@@ -76,6 +77,8 @@ __all__ = [
     "AgentRolloutResult",
     "AgentRolloutSkip",
     "AgentStorageInfoOut",
+    "AppSettingsOut",
+    "AppSettingsUpdate",
     "AuditEventOut",
     "AuditEventPage",
     "CamelModel",

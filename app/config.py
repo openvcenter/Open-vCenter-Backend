@@ -40,8 +40,6 @@ class Settings(BaseSettings):
     inventory_queue_max_length: int = 1
     # an agent is considered offline if agent_status is older than this
     agent_offline_after_seconds: int = 120
-    # quick host/VM metrics: how long a sample is kept before the worker prunes it
-    metrics_retention_seconds: int = 3600
 
     # --- startup preflight ---
     # Verify (and repair) Valkey / Postgres / RabbitMQ on boot; the process logs

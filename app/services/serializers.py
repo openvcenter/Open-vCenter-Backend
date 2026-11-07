@@ -212,7 +212,6 @@ def vm_out(
         highly_available=vm.highly_available,
         notes=vm.notes,
         tag_ids=sorted(t.id for t in vm.tags),
-        metrics_enabled=vm.metrics_enabled,
         created_at=vm.vm_created_at,
         lock=VmLock.model_validate(lock) if lock else None,
     )

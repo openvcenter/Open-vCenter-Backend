@@ -170,6 +170,10 @@ Access control (see LLM.md "Access control"):
 - `GET /rbac/effective?group=<name>&object=vm:<id>` - why a group may do what
 - `GET /vms/{id}/console` (`vm.console`) · `GET /hosts/{id}/console` (`host.console`) - where the console connects
 
+Application settings (see LLM.md "Application settings"):
+
+- `GET /settings` · `PATCH /settings` any subset of `{metricsRetentionSeconds, metricsIntervalSeconds, vmConsoleNonAdminAccess}` (`settings.manage`)
+
 Responses are **camelCase** JSON. Errors: `{ "error": { "code", "message", "details"? } }`.
 
 ## RabbitMQ queues
@@ -206,8 +210,8 @@ features, migrations or contract changes, **major** once the API is stable
 `version` in `pyproject.toml` (the only place it's written - the app reads it
 back from the installed package for OpenAPI's `info.version`), a git tag
 (`0.1.2`, no `v` prefix), and a GitHub Release. Pushing the tag makes CI
-publish the image `ghcr.io/openvcenter/ovc-backend:<version>` (every push
-to `main` still publishes `:latest`).
+publish the image `ghcr.io/openvcenter/ovc-backend:<version>` and move
+`:latest` to it. Pushes to `main` build nothing.
 
 1. Start from an up-to-date, clean `main` where `ruff check app` and
    `python -m pytest` pass.

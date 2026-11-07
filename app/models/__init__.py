@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .agent_binary import AgentBinary
+from .app_settings import APP_SETTINGS_ID, AppSettings
 from .audit import AUDIT_ACTOR_TYPES, AUDIT_OUTCOMES, AuditEvent
 from .base import Base
 from .cluster import Cluster
@@ -24,6 +25,8 @@ from .vm import VM_STATES, Vm, VmDisk, VmNic, VmSnapshot, VmThumbnail
 
 __all__ = [
     "AgentBinary",
+    "AppSettings",
+    "APP_SETTINGS_ID",
     "AuditEvent",
     "AUDIT_ACTOR_TYPES",
     "AUDIT_OUTCOMES",
