@@ -8,6 +8,8 @@ All notable changes to ovc-backend. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-07
+
 ### Added
 
 - `GET` / `PATCH /settings` (`settings.manage`) and migration 0008
@@ -152,7 +154,8 @@ All notable changes to ovc-backend. The format follows
 
 First public release.
 
-[Unreleased]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.1...0.3.0
 [0.2.1]: https://github.com/openvcenter/Open-vCenter-Backend/compare/0.2.0...0.2.1
